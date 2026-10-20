@@ -50,8 +50,11 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-010](#zpt-010) | done | med | tint.uc.js | `color-source` pref (`content` \| `page-background`) + config plumbing |
 | [ZPT-011](#zpt-011) | done | med | frame.js | `readDeclaredBackground()`: body → html → clear |
 | [ZPT-012](#zpt-012) | done | low | manifest / docs | Dropdown entry, README + AGENTS updates, version bump |
-| [ZPT-013](#zpt-013) | open | med | — | Verification checklist for the page-background source |
+| [ZPT-013](#zpt-013) | done | med | — | Verification checklist for the page-background source |
 | [ZPT-014](#zpt-014) | accepted | low | frame.js | Sites whose background is on a wrapper get no tint |
+| [ZPT-015](#zpt-015) | open | med | frame.js | Gmail: the declared background is not the visible surface |
+| [ZPT-016](#zpt-016) | open | low | frame.js | WhatsApp: partial mismatch |
+| [ZPT-017](#zpt-017) | done | low | style.css | Frame separator: a hairline so the page stays bounded |
 
 ---
 
@@ -137,7 +140,7 @@ Decisions taken (do not relitigate without reason):
 
 ### ZPT-013
 **Verification checklist for the page-background source**
-- **Status:** open · **Sev:** med · **Area:** — (testing)
+- **Status:** done · **Sev:** med · **Area:** — (testing)
 - **Why:** no automated harness; the interesting surface is a live Zen window.
   Perf is the product, so this needs a measurement, not a vibe check.
 - **Checklist (set `zen.page-tint.debug = true`):**
@@ -155,6 +158,19 @@ Decisions taken (do not relitigate without reason):
      should re-evaluate immediately.
   8. Tab-switch latency at the usual high tab count, before vs after, with the
      source on `page-background`.
+- **Result (v1.0.0, manual pass in Zen):**
+  1. ✅ **GitHub** — exact match.
+  2. ✅ **Reddit** — exact match.
+  3. ✅ **YouTube** — flat `#0f0f0f`, no ambient follow. Expected: the ambient
+     path belongs to the `content` source only.
+  4. ⚠️ **Gmail** — the frame does not match the visible app. See
+     [ZPT-015](#zpt-015); diagnosis still open.
+  5. ⚠️ **WhatsApp** — partial mismatch. See [ZPT-016](#zpt-016).
+  6. ⬜ Not exercised — no transparent-body SPA in the pass.
+  7. ⬜ Not reported.
+  8. ⬜ Not measured. The declared source is *cheaper* than the pixel path (two
+     computed styles vs a compositor readback), so no regression is expected —
+     but it is still an expectation, not a measurement.
 - **Refs:** `AGENTS.md` manual checklist; archived `ZPT-007`.
 
 ### ZPT-014
@@ -176,6 +192,62 @@ Decisions taken (do not relitigate without reason):
   add the host to `disable-hosts`.
 - **Refs:** the interview decision recorded in [Current focus](#current-focus-page-background-tint-source).
 
+### ZPT-015
+**Gmail: the declared background is not the visible surface**
+- **Status:** open · **Sev:** med · **Area:** frame.js (`readDeclaredBackground`)
+- **Symptom:** on Gmail the chrome does not match what the eye is drawn to. The
+  mail list is a white card sitting on a tinted app shell, and the frame lands
+  on the shell.
+- **Why:** Gmail's `<body>` declares the *app* background (the shell behind the
+  card), not the card. Under the declared-background source that is the correct
+  answer to the question being asked — and the wrong answer to "what color does
+  this page look like". This is the documented trade-off, not a bug in the
+  sampler.
+- **Diagnosis still open:** the screenshot shows a slate-blue band over Gmail's
+  header. That band may be Gmail's own transparent-header area showing the
+  browser canvas through it, rather than anything the mod painted. Settle it
+  with the computed value: open devtools on the Gmail tab, Console,
+  `getComputedStyle(document.body).backgroundColor` — and compare it with the
+  `[zen-tint] message received` log line.
+- **Options:** a per-site source override (a host list that forces `content`
+  for named hosts) — the clean fix, and the missing half of the "global, not
+  per-site" limitation in the README. Or: accept it, since Gmail is precisely
+  the case the `content` source exists for.
+- **Workaround:** `zen.page-tint.disable-hosts` for `mail.google.com`, or
+  switch the source back to `content`.
+- **Refs:** [ZPT-014](#zpt-014), [ZPT-016](#zpt-016), the README's
+  "global, not per-site" limitation.
+
+### ZPT-016
+**WhatsApp: partial mismatch**
+- **Status:** open · **Sev:** low · **Area:** frame.js (`readDeclaredBackground`)
+- **Symptom:** on WhatsApp Web the chrome does not match the page.
+- **Why (probable):** WhatsApp Web paints its background on a wrapper element
+  rather than on `<body>`, so the declared-background source either resolves to
+  nothing or to a layer the user isn't looking at — the same class as
+  [ZPT-014](#zpt-014). Not confirmed; needs the same computed-value check as
+  [ZPT-015](#zpt-015).
+- **Options:** see [ZPT-014](#zpt-014)'s options. A per-site source override
+  would cover this one too.
+- **Workaround:** `zen.page-tint.disable-hosts` for `web.whatsapp.com`.
+- **Refs:** [ZPT-014](#zpt-014), [ZPT-015](#zpt-015).
+
+### ZPT-017
+**Frame separator: a hairline so the page stays bounded**
+- **Status:** done · **Sev:** low · **Area:** style.css (+ prefs)
+- **Why:** the point of the tint is continuity, but continuity taken too far
+  erases where the page ends — a sidebar and a page in the same color read as
+  one flat field. Requested after the v1.0.0 manual pass.
+- **Fix:** `zen.page-tint.frame-separator` (int px, default 1) →
+  `--zpt-frame-separator-width`. Drawn OUTSET in the frame gap (as the
+  first-listed box-shadow, so it paints over the gap ring) in non-compact mode,
+  and as an inset outline in compact mode, where there is no gap to draw in.
+  The color is derived in CSS from `--zen-tab-header-foreground`, so it flips
+  light/dark with the page and needs no knob of its own.
+- **Invariant added:** the separator is drawn in the gap, never over the page's
+  own pixels — see `AGENTS.md`.
+- **Done in:** ZPT-D007.
+
 ---
 
 ## Done log
@@ -184,6 +256,13 @@ Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
 _(nothing yet — this tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D007
+**Frame separator hairline** — `done`
+- `zen.page-tint.frame-separator` (default 1px) → `--zpt-frame-separator-width`.
+- Outset shadow in the frame gap (non-compact), inset outline (compact).
+- Color derived from the tint's foreground, so it contrasts either way.
+- Version `1.0.0` → `1.1.0` in `theme.json` **and** the `// @version` header.
 
 ### ZPT-D006
 **Dropdown entry, README + AGENTS updates, version bump** — `done`

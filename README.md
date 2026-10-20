@@ -28,6 +28,8 @@ Those come apart more often than you'd think:
 
 And when the page declares *nothing* (a transparent `<body>` and `<html>`), the mod doesn't guess. It clears the tint and hands the frame back to your Zen theme, because "no declared background" is a real answer and inventing white for it would be worse than being quiet.
 
+**…but not so much that you lose track of where the page ends.** Continuity taken too far erases the boundary: a sidebar and a page in the same color read as one flat field. A hairline runs along the content edge, tinted to contrast with the page, so the frame is continuous *and* bounded. It's 1px by default (`zen.page-tint.frame-separator`) and 0 turns it off.
+
 ## Two color sources
 
 `zen.page-tint.color-source` picks between two ways of answering "what color is this page?". Both are one click apart in the Sine panel and both apply live — no restart.
@@ -71,6 +73,7 @@ Everything is configurable from the **Sine settings panel** for this mod (Zen �
 | `zen.page-tint.light-average` | `false` | Average **page** samples as light instead of as flat color (decode sRGB to linear, weight vivid cells above gray ones). Physically more accurate and noticeably brighter/more saturated on mixed pages. Applies to the `content` source only. |
 | `zen.page-tint.frame-gap` | `5` | Gap (px) between the content area and the window edge in non-compact mode. Compact mode stays flush so Zen's screen-edge hover controls remain reachable. Extremely large values can push the page viewport entirely offscreen. |
 | `zen.page-tint.frame-radius` | `14` | Content corner radius (px). |
+| `zen.page-tint.frame-separator` | `1` | Hairline (px) between the page and the tinted chrome, so the page reads as a bounded object instead of dissolving into it. Follows the page's light/dark automatically (a light line on a dark page, a dark line on a light one). `0` = off. |
 
 **Need a restart** (read once at load):
 

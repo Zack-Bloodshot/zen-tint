@@ -151,8 +151,16 @@ These are load-bearing. Violating them is how this project regressed before
 - **Version lives in two places** and must move together: `theme.json` `version`
   and the `// @version` header in `tint.uc.js`. Commit history uses
   `Release vX.Y.Z: <summary>`, `fix: ...`, `docs: ...`.
-- Surface-level geometry knobs (`--zpt-frame-gap`, `--zpt-frame-radius`) are
-  prefs, but `--zpt-frame-shadow` is still a raw CSS knob in `style.css` `:root`.
+- Surface-level geometry knobs (`--zpt-frame-gap`, `--zpt-frame-radius`,
+  `--zpt-frame-separator-width`) are prefs, but `--zpt-frame-shadow` is still a
+  raw CSS knob in `style.css` `:root`.
+- **The frame separator must be drawn OUTSET, in the gap, never over the page's
+  own pixels.** It is the hairline that keeps the page bounded while the tint
+  makes it continuous. Painting it over the content (an inset shadow on the
+  browser container, a background on the page) would be a second coat over
+  pixels the mod doesn't own — the same class of bug as the double-tint layering
+  below. Its color is derived in CSS from `--zen-tab-header-foreground`, so it
+  flips light/dark with the page and needs no knob of its own.
 
 ## Testing / verifying a change
 

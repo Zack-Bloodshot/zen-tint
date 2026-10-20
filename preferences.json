@@ -96,6 +96,14 @@
     "defaultValue": 14,
     "placeholder": "14"
   },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.frame-separator",
+    "label": "Frame separator (px): hairline between the page and the tinted chrome, so the page reads as a bounded object instead of dissolving into it. Follows the page's light/dark automatically. 0 = off.",
+    "defaultValue": 1,
+    "placeholder": "1"
+  },
 
   {
     "type": "separator",

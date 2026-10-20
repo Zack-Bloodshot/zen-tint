@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Zen Tint
 // @description    Zen chrome that continues the page's background color
-// @version        1.0.0
+// @version        1.1.0
 // ==/UserScript==
 
 (() => {
@@ -112,6 +112,13 @@
   //     Non-compact only: compact mode stays flush so Zen's screen-edge hover
   //     targets remain reachable.
   //   zen.page-tint.frame-radius (int px, default 14)  → --zpt-frame-radius
+  //   zen.page-tint.frame-separator (int px, default 1) → --zpt-frame-separator-width
+  //     A hairline at the content edge, so the page reads as a bounded object
+  //     instead of dissolving into the tinted chrome — the whole point of
+  //     tinting is continuity, but continuity taken too far erases where the
+  //     page ends. The color follows the tint's own foreground (a light line on
+  //     a dark page, a dark line on a light one), so it stays legible either
+  //     way without a second knob. 0 = off.
   //   zen.page-tint.saturation   (int 0..200, default 100)
   //     Scales the sampled color's HSL saturation before it's applied. 0 =
   //     grayscale chrome, 100 = the page's own saturation, 200 = double (more
@@ -150,6 +157,7 @@
   let BRIGHTNESS = clampInt(prefInt('zen.page-tint.brightness', 100), 0, 300);
   let CONTRAST = clampInt(prefInt('zen.page-tint.contrast', 100), 0, 300);
   let AMBIENT_SPREAD = clampInt(prefInt('zen.page-tint.ambient-spread', 0), 0, 100);
+  let FRAME_SEPARATOR = clampInt(prefInt('zen.page-tint.frame-separator', 1), 0, 6);
   // Ceiling on the gradient overlay's alpha. Full opacity would let an edge color
   // completely replace the base tint at the extremes, which breaks the readable-
   // foreground pick (that's computed against the base). Capping keeps the endpoints
@@ -318,6 +326,9 @@
     root.style.setProperty('--zpt-strength', `${MIX_AMOUNT}%`);
     root.style.setProperty('--zpt-frame-gap', `${Math.max(0, prefInt('zen.page-tint.frame-gap', 5))}px`);
     root.style.setProperty('--zpt-frame-radius', `${Math.max(0, prefInt('zen.page-tint.frame-radius', 14))}px`);
+    // The separator's COLOR is derived in CSS from the tint's own foreground,
+    // so only the width needs to come from here.
+    root.style.setProperty('--zpt-frame-separator-width', `${FRAME_SEPARATOR}px`);
   }
 
   // Write the tint variables for a raw sampled color (null, or strength 0, clears
@@ -740,6 +751,10 @@
           break;
         case 'zen.page-tint.frame-gap':
         case 'zen.page-tint.frame-radius':
+          applyCssVarPrefs();
+          break;
+        case 'zen.page-tint.frame-separator':
+          FRAME_SEPARATOR = clampInt(prefInt('zen.page-tint.frame-separator', 1), 0, 6);
           applyCssVarPrefs();
           break;
         // Color-source changes invalidate every cached sample, since the cache

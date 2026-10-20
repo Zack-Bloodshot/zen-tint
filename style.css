@@ -13,6 +13,12 @@
   --zpt-frame-gap: 5px;
   --zpt-frame-radius: 14px;
   --zpt-frame-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.10);
+  /* Hairline drawn at the content edge so the page reads as a bounded object
+     instead of dissolving into the tinted chrome. The width is a pref
+     (zen.page-tint.frame-separator); the color is derived from the tint's own
+     foreground, so it flips light/dark with the page and needs no knob. */
+  --zpt-frame-separator-width: 1px;
+  --zpt-frame-separator-color: color-mix(in srgb, var(--zen-tab-header-foreground, #000) 30%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -433,8 +439,28 @@
        oscillate between the toolbar and the page — the "twitch" (#11). Leaving the
        container's overflow at Zen's default keeps the content clipped where it
        belongs and the ring still paints. */
+    /* The separator hairline is listed FIRST so it paints over the gap ring: a
+       1px spread covers the outermost 1px of the gap, right against the content
+       edge, while the ring fills the rest of it. First-listed shadows paint over
+       later ones, so the order here IS the layer order.
+
+       Both shadows are OUTSET, so they paint in the frame gap — chrome pixels.
+       Neither touches the page itself, which matters because a translucent tint
+       over the page's own pixels would be a second coat over content we don't
+       own. */
     &:not([zen-compact-mode="true"]) .browserSidebarContainer:not(.zen-glance-background):not(.zen-glance-overlay) {
-      box-shadow: 0 0 0 var(--zpt-frame-gap) var(--zpt-tint, var(--zen-tab-header-background, var(--zen-main-browser-background))) !important;
+      box-shadow:
+        0 0 0 var(--zpt-frame-separator-width) var(--zpt-frame-separator-color),
+        0 0 0 var(--zpt-frame-gap) var(--zpt-tint, var(--zen-tab-header-background, var(--zen-main-browser-background))) !important;
+    }
+
+    /* Compact mode has no gap (the frame sits flush to the window edge), so the
+       ring has nowhere to live and an outset shadow would paint over the page's
+       own edge pixels. There the hairline is drawn INSET instead, framing the
+       content from inside without reaching into the chrome. */
+    &[zen-compact-mode="true"] .browserSidebarContainer:not(.zen-glance-background):not(.zen-glance-overlay) {
+      outline: var(--zpt-frame-separator-width) solid var(--zpt-frame-separator-color);
+      outline-offset: calc(-1 * var(--zpt-frame-separator-width));
     }
 
     #zen-sidebar-splitter,
