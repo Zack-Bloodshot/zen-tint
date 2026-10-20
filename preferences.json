@@ -1,0 +1,185 @@
+[
+  {
+    "type": "text",
+    "label": "Zen Tint",
+    "size": "20px",
+    "margin": "18px 0 2px 0"
+  },
+  {
+    "type": "text",
+    "label": "Adaptive chrome color from the active page. Settings marked “restart” take effect after Zen is restarted; the rest apply instantly.",
+    "size": "12px",
+    "margin": "0 0 6px 0"
+  },
+
+  {
+    "type": "separator",
+    "label": "Appearance — applies live",
+    "margin": "14px 0 8px 0"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.mix-amount",
+    "label": "Tint strength (0–100): page color laid as an overlay over your Zen theme. 100 = full page color, 0 = your untouched Zen theme/gradient.",
+    "defaultValue": 100,
+    "placeholder": "100"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.saturation",
+    "label": "Saturation (0–200): vibrancy of the tint. 0 = grayscale, 100 = the page's own, 200 = double.",
+    "defaultValue": 100,
+    "placeholder": "100"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.brightness",
+    "label": "Brightness (0–300): gain on the tint's lightness. 100 = as sampled, 200 = twice as light. Applied before the lightness clamps below.",
+    "defaultValue": 100,
+    "placeholder": "100"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.contrast",
+    "label": "Contrast (0–300): pushes the tint away from mid-grey. 100 = as sampled, 200 = double, 0 = flat grey.",
+    "defaultValue": 100,
+    "placeholder": "100"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.ambient-spread",
+    "label": "Ambient spread (0–100): directional gradient strength. The chrome takes color from the matching side of the page instead of one flat average — left of the URL bar from the left of the page, top of the sidebar from the top. 0 = off (flat tint).",
+    "defaultValue": 0,
+    "placeholder": "0"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.min-lightness",
+    "label": "Minimum lightness (0–100): floor so near-black pages don't make the chrome muddy. 0 = no floor.",
+    "defaultValue": 0,
+    "placeholder": "0"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.max-lightness",
+    "label": "Maximum lightness (0–100): cap so blinding-white pages don't wash the chrome out. 100 = no cap.",
+    "defaultValue": 100,
+    "placeholder": "100"
+  },
+  {
+    "type": "string",
+    "property": "zen.page-tint.disable-hosts",
+    "label": "Disable on these sites (comma-separated hosts; supports *.example.com). The chrome keeps your Zen theme on them.",
+    "defaultValue": "",
+    "placeholder": "example.com, *.github.com"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.frame-gap",
+    "label": "Frame gap (px): non-compact mode only. Compact mode stays flush so edge-hover controls keep working.",
+    "defaultValue": 5,
+    "placeholder": "5"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.frame-radius",
+    "label": "Frame corner radius (px).",
+    "defaultValue": 14,
+    "placeholder": "14"
+  },
+
+  {
+    "type": "separator",
+    "label": "Color source — applies live",
+    "margin": "16px 0 8px 0"
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.page-tint.youtube-ambient",
+    "label": "On YouTube, sample the player's own ambient mode (\"cinematic lighting\") canvas. Matches the glow YouTube draws on screen and skips letterbox bars. Needs Ambient mode enabled in the player; falls back automatically when it isn't.",
+    "defaultValue": true
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.page-tint.light-average",
+    "label": "Average pages as light rather than flat color (brighter, more saturated on mixed pages — a mostly-dark page with bright content stops reading as dark). The YouTube ambient source always uses this model.",
+    "defaultValue": false
+  },
+
+  {
+    "type": "separator",
+    "label": "Live mode — follow video / animated pages (restart)",
+    "margin": "16px 0 8px 0"
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.page-tint.live-mode",
+    "label": "Enable live mode (continuously follow video / animated content).",
+    "defaultValue": true,
+    "restart": true
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.page-tint.live-mode-always-on",
+    "label": "Always poll, not only while a video is playing (higher idle cost).",
+    "defaultValue": false,
+    "restart": true
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.live-mode-rate-ms",
+    "label": "Color change rate (ms): how often the tint can change while polling. Used exactly as set. Keep it at or above the fade duration below, or fades get cut off before they finish.",
+    "defaultValue": 2000,
+    "placeholder": "2000",
+    "restart": true
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.live-mode-threshold",
+    "label": "Re-tint threshold (0–255): minimum per-channel color change needed to re-tint while polling.",
+    "defaultValue": 8,
+    "placeholder": "8",
+    "restart": true
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "zen.page-tint.live-mode-smoothing-ms",
+    "label": "Color fade duration (ms) applied to every tint change.",
+    "defaultValue": 1000,
+    "placeholder": "1000",
+    "restart": true
+  },
+  {
+    "type": "string",
+    "property": "zen.page-tint.live-mode-hosts",
+    "label": "Always-on host allowlist (comma-separated) for canvas/WebGL players and cross-origin video embeds. Supports *.example.com.",
+    "defaultValue": "",
+    "placeholder": "example.com, *.spotify.com, localhost",
+    "restart": true
+  },
+
+  {
+    "type": "separator",
+    "label": "Advanced (restart)",
+    "margin": "16px 0 8px 0"
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.page-tint.debug",
+    "label": "Debug logging to the Browser Console (Cmd/Ctrl-Shift-J).",
+    "defaultValue": false,
+    "restart": true
+  }
+]
