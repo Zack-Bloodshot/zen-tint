@@ -81,6 +81,7 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-022](#zpt-022) | done | low | tint.uc.js + preferences.json | **Page outline: make it optional — a real toggle in the settings** (priority 2) |
 | [ZPT-023](#zpt-023) | done | med | frame.js + tint.uc.js | **Outline color: use the page's own visible colors instead of the favicon** (priority 3) |
 | [ZPT-024](#zpt-024) | done | med | style.css + tint.uc.js | **Page outline overlays page content: make it a real layout border, with fullscreen + Glance guards** (priority 1) |
+| [ZPT-025](#zpt-025) | done | high | style.css | **The outline border survives fullscreen: the fullscreen guards lose a specificity fight** (priority 1) |
 
 ---
 
@@ -687,6 +688,32 @@ Decisions taken (do not relitigate without reason):
   [ZPT-023](#zpt-023) (the color plumbing this keeps), [ZPT-021](#zpt-021)
   (the cleanup this touches last — coordinate the merge).
 
+### ZPT-025
+**The outline border survives fullscreen (guard loses a specificity fight)**
+- **Status:** done · **Priority:** 1 · **Sev:** high · **Area:** style.css
+- **Symptom:** after the v1.5.0 layout-border rework, fullscreen video and
+  whole-window fullscreen still framed the picture with the outline. The
+  guard ZPT-024 shipped — `:root[inDOMFullscreen="true"]` /
+  `:root[sizemode="fullscreen"]` zeroing `border-width` / `overflow` /
+  `border-radius` — never won a restyle.
+- **Root cause:** an `!important` tie is decided by SPECIFICITY, not by file
+  order. The border rule carries three attribute gates (specificity
+  (0,1,3,0)); the guards carried one ((0,1,1,0)); both are `!important`, so
+  the border rule outranked the guards no matter where they sat in the file.
+  The Glance guard escaped the trap because its `:has()` pseudo-class
+  outranks the border rule.
+- **Decision:** the guards repeat the border rule's own two attribute gates —
+  `:root[zen-page-tint="on"][zen-page-tint-outline="on"][inDOMFullscreen="true"]`
+  and the `[sizemode="fullscreen"]` sibling — scoring (0,1,4,0) and winning.
+  The gates cannot over-guard: they are the same conditions the border rule
+  requires, so they only match in the one state where a border exists. The
+  rule of thumb, written into `AGENTS.md`: **an exclusion guard must
+  out-specify the rule it guards against, and keep its gates in sync with
+  it.**
+- **Done in:** ZPT-D012.
+- **Refs:** [ZPT-024](#zpt-024) (the border this guards), the specificity
+  notes in `style.css` and `AGENTS.md`.
+
 ---
 
 ## Done log
@@ -695,6 +722,25 @@ Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
 _(The tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D012
+**Fullscreen guard actually removes the outline border now** — `done`
+- v1.5.0's fullscreen guards (`:root[inDOMFullscreen="true"]` /
+  `:root[sizemode="fullscreen"]`) both lost a specificity fight against the
+  border rule: every side used `!important`, and an `!important` tie goes to
+  specificity, not file order. The border rule's three attribute gates
+  ((0,1,3,0)) outranked the guards' one gate ((0,1,1,0)), so the border — and
+  its `overflow` clip and `border-radius` — survived fullscreen untouched.
+- Fix in `style.css`: both guards now repeat the border rule's own attribute
+  gates (`zen-page-tint="on"` + `zen-page-tint-outline="on"`), scoring
+  (0,1,4,0) and winning the tie while the outline is on — the only state in
+  which a border exists, so the gates cannot over-guard. The specificity math
+  is written into the rule's comment; the Glance guard already outranked
+  everything via `:has()`.
+- No JS changes. The comments in `style.css` and the layout-border invariant
+  in `AGENTS.md` now record the invariant-sized trap: **a CSS exclusion guard
+  must out-specify the rule it fights, not merely sit after it.**
+- Version `1.5.0` → `1.6.1` in `theme.json` **and** the `// @version` header.
 
 ### ZPT-D011
 **The page outline becomes a layout border, not an overlay** — `done`

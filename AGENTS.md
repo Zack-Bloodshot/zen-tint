@@ -215,6 +215,15 @@ These are load-bearing. Violating them is how this project regressed before
   corners. Fullscreen (DOM fullscreen and `sizemode="fullscreen"`) removes
   the border AND the clip entirely — fullscreen is not a boundary state — and
   a Glance drops just the border width for the glance's lifetime.
+- **A CSS exclusion guard must OUT-SPECIFY the rule it fights.** Every guard
+  here (`inDOMFullscreen` / `sizemode="fullscreen"` / the Glance `:has()`) is
+  `!important` against an `!important` border rule, and an `!important` tie
+  goes to specificity, not to file order — the v1.5.0 fullscreen guards
+  carried one attribute gate against the border rule's three
+  ((0,1,1,0) vs (0,1,3,0)) and silently lost: the line survived fullscreen
+  (ZPT-025). The guards therefore repeat the border rule's own gates and sit
+  one specificity level above it; if the border rule's selector changes,
+  change the guards with it.
 
 ## Testing / verifying a change
 

@@ -4,7 +4,7 @@
   "description": "Zen chrome that continues the page: the URL bar, sidebar and titlebar take the page's own declared background, and the page is framed by a squircle layout border in a color the page contains — laid out inside the line, never painted over. Optional video-aware visible-color sampling. Single rAF-coalesced sampler, per-origin LRU cache, no retry storms, no per-tab paint cascade. Built for heavy-tab sessions.",
   "author": "Zack-Bloodshot",
   "homepage": "https://github.com/Zack-Bloodshot/zen-tint",
-  "version": "1.5.0",
+  "version": "1.6.1",
   "tags": ["adaptive", "theming"],
   "fork": ["zen"],
   "scripts": {

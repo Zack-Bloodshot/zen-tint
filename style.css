@@ -601,9 +601,19 @@
    colored stroke across the picture would be plainly wrong — so the border
    and its clipping are REMOVED here, not merely recolored. Both ways out of
    fullscreen simply stop matching these rules, and the outline returns with
-   no JS bookkeeping and no stale line left over the page. */
-:root[inDOMFullscreen="true"] #zen-tabbox-wrapper,
-:root[sizemode="fullscreen"] #zen-tabbox-wrapper {
+   no JS bookkeeping and no stale line left over the page.
+
+   The guards repeat the border rule's own attribute gates on purpose, and
+   that is load-bearing SPECIFICITY, not style: both sides are !important, and
+   an !important tie is decided by specificity, not by file order. The border
+   rule scores (1 id + 3 attribute/class matches) = (0,1,3,0); a bare
+   `:root[inDOMFullscreen="true"]` guard scored (0,1,1,0), lost the tie, and
+   the line survived fullscreen (ZPT-025). Carrying the same two gates raises
+   the guards to (0,1,4,0) — they win while the outline is on, which is the
+   only state in which a border exists at all. KEEP THE GATES IN SYNC if the
+   border rule's selector ever changes. */
+:root[zen-page-tint="on"][zen-page-tint-outline="on"][inDOMFullscreen="true"] #zen-tabbox-wrapper,
+:root[zen-page-tint="on"][zen-page-tint-outline="on"][sizemode="fullscreen"] #zen-tabbox-wrapper {
   border-width: 0 !important;
   overflow: visible !important;
   border-radius: 0 !important;
