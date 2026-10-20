@@ -99,7 +99,7 @@
   {
     "type": "checkbox",
     "property": "zen.page-tint.page-outline",
-    "label": "Draw a page outline. A squircle stroke around the whole page viewport, in the site's own color (taken from its favicon) — the page's boundary, so the frame reads as continuous AND bounded. Turn it off for the tint and nothing else: the page keeps its own corners and no line is drawn.",
+    "label": "Draw a page outline. A squircle stroke around the whole page viewport, in a color the page itself contains (with the site's favicon as the fallback) — the page's boundary, so the frame reads as continuous AND bounded. Turn it off for the tint and nothing else: the page keeps its own corners and no line is drawn.",
     "defaultValue": true
   },
   {

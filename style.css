@@ -13,11 +13,14 @@
   --zpt-frame-gap: 5px;
   --zpt-frame-radius: 14px;
   --zpt-frame-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.10);
-  /* The drawn boundary: a squircle stroke around the whole page viewport, in
-     the site's own primary color. The width is a pref
+  /* The drawn boundary: a squircle stroke around the whole page viewport, in a
+     color the page itself contains. The width is a pref
      (zen.page-tint.page-outline-width); the color is derived here, so the
      fallback chain lives in one place:
-       site color (--zpt-page-site-color, set from the favicon)
+       page color (--zpt-page-site-color, sampled from the page's own visible
+         pixels by frame.js)
+         -> the site's favicon color (same variable, set by tint.uc.js when the
+            page has no color of its own)
          -> the tint's own foreground, a neutral line that flips light/dark
             with the page (this is what the old hairline used)
          -> nothing at all (an untinted page draws no outline)
@@ -525,9 +528,10 @@
  * The tint makes the chrome continuous with the page. Taken too far, that
  * erases where the page ENDS — a sidebar and a page in the same color read as
  * one flat field. So the boundary is DRAWN, deliberately: a squircle stroke
- * around the whole page viewport, on all four sides, continuously, in the
- * site's own primary color (--zpt-page-site-color, taken from its favicon by
- * tint.uc.js).
+ * around the whole page viewport, on all four sides, continuously, in a color
+ * the page itself contains (--zpt-page-site-color: sampled from the page's own
+ * visible pixels by frame.js, with the site's favicon as the fallback when the
+ * page has no color of its own).
  *
  * It is a BORDER, and a border is allowed to sit on top of the page's
  * outermost pixels — that is what a border is. The TINT is not allowed to (see

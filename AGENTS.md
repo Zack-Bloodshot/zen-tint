@@ -24,8 +24,8 @@ the browser chrome, loads `style.css`, and renders the settings panel from
 | File | Runs where | Role |
 |---|---|---|
 | `theme.json` | Sine manifest | Mod id/version, entry points. Loads `tint.uc.js` into `chrome://browser/content/browser.xhtml`, `style.css` as chrome style (`content` style is empty on purpose). |
-| `tint.uc.js` | **Chrome** process (privileged, same scope as `browser.xhtml`) | The brain. Listens for tab/navigation events, owns the LRU cache, decides what to tint, writes CSS variables onto `<html>`, drives the content script over the message manager, and draws the page outline (position + favicon color). |
-| `frame.js` | **Content** process (per browser, loaded via `loadFrameScript`) | The sampler. Reads the page's color, observes theme-related mutations, runs live-mode polling, and pushes colors back to chrome. |
+| `tint.uc.js` | **Chrome** process (privileged, same scope as `browser.xhtml`) | The brain. Listens for tab/navigation events, owns the LRU cache, decides what to tint, writes CSS variables onto `<html>`, drives the content script over the message manager, and draws the page outline (position + the page color the frame sampled, with the favicon as fallback). |
+| `frame.js` | **Content** process (per browser, loaded via `loadFrameScript`) | The sampler. Reads the page's color and the drawn outline's page color, observes theme-related mutations, runs live-mode polling, and pushes colors back to chrome. |
 | `style.css` | Chrome stylesheet | Consumes the CSS variables the chrome script sets and paints the tinted surfaces. Also the frame gap/radius/shadow geometry, and the page outline's stroke. |
 | `preferences.json` | Sine settings panel | Every entry maps 1:1 to a `zen.page-tint.*` pref in `about:config`. Cosmetic only — the defaults live in the JS. |
 | `README.md` | Users | Long, deliberately detailed. Keep it accurate; it is referenced from the Sine store listing. |
@@ -45,17 +45,19 @@ repackaged/reloaded into Zen, not from a bare file copy.
    because rAF is throttled when the window is occluded.
 3. Cache hit → apply instantly, **zero IPC** (`applyTheme` → `renderTint`).
 4. Cache miss → `loadFrameScript(browser)`, which also pushes config.
-5. `frame.js` samples, observes, and pushes `{ bg, edges, source, href }` via
-   `sendAsyncMessage('zen-page-tint:theme')`.
+5. `frame.js` samples, observes, and pushes `{ bg, edges, outlineColor, source,
+   href }` via `sendAsyncMessage('zen-page-tint:theme')`.
 6. Chrome applies saturation/brightness/contrast/clamp (`transformColor`), picks
    a black-or-white foreground by Rec 601 luminance (`readableFg`), writes
    `--zen-tab-header-background` / `--zen-tab-header-foreground`, and flips the
    `zen-page-tint` attribute. `style.css` does the rest.
 7. Separately, the chrome draws the **page outline**: a squircle stroke around
-   the browser's rect (a fixed-position element in the chrome document) in the
-   site's own color, which comes from the favicon and is cached per host in
-   `zen.page-tint.icon-colors`. This is chrome-side only — no IPC, no content
-   process, and no change to the shape of the theme cache.
+   the browser's rect (a fixed-position element in the chrome document). Its
+   color is `outlineColor` from the sample — a chromatic color found in the
+   page's own visible pixels — with the site's favicon (cached per host in
+   `zen.page-tint.icon-colors`) as the fallback when the page has none. The
+   favicon path is chrome-side only; the page-color path is one extra grid read
+   in the frame, carried in the same message and the same theme-cache entry.
 
 **Message names** (both scripts hardcode them; keep them in sync):
 `zen-page-tint:theme` (content→chrome), `zen-page-tint:config` (chrome→content),
@@ -77,6 +79,18 @@ No `drawWindow`, no `<meta name="theme-color">`, no DOM walk, and never any edge
 colors — it answers "what does the page declare?" rather than "what is
 painted?", and the two questions have different right answers. A single declared
 color has no spatial content, so `ambient-spread` is inert under this source.
+
+**The outline color is a separate read, on either source.** `readOutlineColor()`
+draws the whole viewport onto its own 32×32 grid (`drawWindow`, smoothing left
+on) and picks the most common **chromatic** hue family, skipping greys and cells
+close to the page background, then clamps the result to read against that
+background. It is gated by `config.outline` (the outline pref/width), never by
+`color-source`: the tint may follow the declared background while the line still
+takes a color the page contains. With the outline off, the declared path really
+is two computed styles and no compositor read. The favicon resolver in
+`tint.uc.js` survives as the fallback for pages that yield no color (monochrome,
+all-background), so the chain is **page color → favicon → the tint's own
+foreground → nothing**.
 
 ## Hard invariants — read before editing
 
@@ -102,8 +116,8 @@ These are load-bearing. Violating them is how this project regressed before
   interpolating saturates the compositor. Only `background-color` fades on the
   chrome surfaces; `color` and `box-shadow` snap.
 - **Cache-hit path stays zero-IPC.** Cache is a bounded LRU keyed by
-  `origin + pathname`, storing `{ bg, edges }` (not `fg` — it's derived). Nothing
-  may be added to this path that talks to a content process.
+  `origin + pathname`, storing `{ bg, edges, outlineColor }` (not `fg` — it's
+  derived). Nothing may be added to this path that talks to a content process.
 - **Pref reads must not share a `try`.** `Services.prefs.get*Pref` throws on a
   wrong-*type* pref (the default arg only covers *missing*), so one mistyped
   `about:config` entry would otherwise revert every later pref. Use the
@@ -126,14 +140,16 @@ These are load-bearing. Violating them is how this project regressed before
   can't force a re-sample under new rules — it can only push the new config and
   clear its cache. `singleton.applyConfig()` compares a signature of the
   result-affecting config fields (`colorSource`, `ytAmbient`, `lightAverage`,
-  `edges`) and re-samples when it changes. Without it the new rules only take
+  `edges`, `outline`) and re-samples when it changes. Without it the new rules only take
   effect on the next mutation / poll tick / tab switch, and on a static page
   with no video none of those may ever happen — the chrome would keep showing
   the old source's color indefinitely.
 - **Editing the sample chain may invalidate the cache's shape.** The cache stores
-  the *result*, not the pixels. Anything that changes what a sample yields (e.g.
-  `ambient-spread` crossing 0, which flips whether edges are computed at all)
-  must `themeCache.clear()`. Don't clear per-element; clear and re-sample.
+  the *result*, not the pixels — `{ bg, edges, outlineColor }` today. Anything
+  that changes what a sample yields (e.g. `ambient-spread` crossing 0, which
+  flips whether edges are computed at all, or the outline switch, which flips
+  whether the outline color is sampled) must `themeCache.clear()`. Don't clear
+  per-element; clear and re-sample.
 - **`frame.js` singleton is anchored on `globalThis`, not `content`.** `content`
   is a fresh window per navigation; anchoring there caused listener/poller
   accumulation. Per-document state lives in the `instance` and is disposed on
@@ -205,11 +221,15 @@ There is no automated harness. Verify in a real Zen build:
    a playing video; `ambient-spread` above 0 (gradient) and back to 0; the
    settings panel applying each live pref without a restart.
 5. Outline checklist: the boundary is drawn on **all four** sides (especially
-   the one against the sidebar); it is in the site's own color, not a grey; it
+   the one against the sidebar); it is in a color **the page contains**, not a
+   grey and not necessarily the favicon's color; it is visible against the page
+   (a dark line on a light page, a light one on a dark page); a page with no
+   chromatic color (a monochrome or all-background page) falls back to the site's
+   brand color, and with neither it falls back to a neutral line; it
    follows the browser when the window is resized and when the sidebar is
    expanded/collapsed; it disappears on an `about:` page and on a
-   per-site-disabled host; a monochrome-logo site falls back to the neutral
-   line; `zen.page-tint.page-outline = false` turns it off entirely (the page
+   per-site-disabled host; `zen.page-tint.page-outline = false` turns it off
+   entirely (the page
    gets its own corners back and the element is torn down), as does
    `zen.page-tint.page-outline-width = 0`; turning either back on restores it
    immediately, without a restart.

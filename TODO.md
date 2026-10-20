@@ -32,12 +32,10 @@ path, live-mode polling, the directional gradient, the source switch — go, so
 the mod does exactly one thing: **match the page's declared background**.
 → [ZPT-021](#zpt-021)
 
-**Order:** ZPT-019 (the visible result) is done, and so is ZPT-022 (the outline
-is now a real switch in the settings). Next is ZPT-023 (take the outline's color
-from the page's own visible colors instead of the favicon). ZPT-021 is the
-cleanup that makes the mod one thing; it is not blocked by them, but it and
-ZPT-023 touch the same code (the pixel sampler), so the two have to be
-reconciled rather than landing in any order.
+**Order:** ZPT-019 (the visible result), ZPT-022 (the switch) and ZPT-023 (the
+outline's color from the page's own pixels) are done. What remains is ZPT-021,
+the cleanup that makes the mod one thing — and the outline sampler is the one
+piece of pixel code that must survive it (see the reconciliation note there).
 
 **One thing left open:** the upstream **inset frame** (gap + radius + drop
 shadow — the "page as a floating card" look) is presentation, not matching, so
@@ -81,7 +79,7 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-020](#zpt-020) | accepted | med | — | Keep only the page-background matching (merged into ZPT-021) |
 | [ZPT-021](#zpt-021) | open | med | frame.js (bulk) | Keep only the page-background matching — delete everything else the previous repo did |
 | [ZPT-022](#zpt-022) | done | low | tint.uc.js + preferences.json | **Page outline: make it optional — a real toggle in the settings** (priority 2) |
-| [ZPT-023](#zpt-023) | open | med | frame.js + tint.uc.js | **Outline color: use the page's own visible colors instead of the favicon** (priority 3) |
+| [ZPT-023](#zpt-023) | done | med | frame.js + tint.uc.js | **Outline color: use the page's own visible colors instead of the favicon** (priority 3) |
 
 ---
 
@@ -407,6 +405,10 @@ Decisions taken (do not relitigate without reason):
   because a frame around the page touches that edge. **Decided: implied by the
   frame**, not a separate line — the outline's left edge IS that line.
 - **Done in:** ZPT-D008.
+- **Superseded in part by [ZPT-023](#zpt-023):** the outline's color now comes
+  from the page's own visible colors, with the favicon used only as the fallback.
+  Everything else here (shape, placement, width, the corner-shape ownership, the
+  single-tint-layer separation) still stands.
 - **Depends on:** nothing — the favicon color is independent of the color
   source, so this can land before or after [ZPT-021](#zpt-021).
 - **Refs:** ZPT-D007 (the hairline this replaces),
@@ -442,7 +444,9 @@ Decisions taken (do not relitigate without reason):
     want (per install or per site), the README has to explain two
     philosophies, and every bug in the pixel path is still a bug in the mod.
   - One behaviour is also cheaper: the declared source is two computed styles
-    instead of a compositor readback.
+    instead of a compositor readback — with one deliberate exception, the
+    outline's color sample (see below), which is skipped entirely while the
+    outline is off.
   - Less code to keep honest: `frame.js` should end up roughly a third of its
     current size.
 - **What gets deleted (`frame.js`):**
@@ -458,6 +462,11 @@ Decisions taken (do not relitigate without reason):
     changes via CSS, which the mutation observers already catch.
   - The `edges` config field, `zen-page-tint-ambient`, the `--zpt-edge-*`
     variables, `edgeStop()`, `EDGE_ALPHA_MAX`, and the directional-gradient CSS.
+  - **Do NOT delete the outline sampler.** `readOutlineColor()` and its 32×32
+    grid / canvas / hue-family pick ([ZPT-023](#zpt-023)) are a different
+    question from the tint's and are the only pixel code that survives. They are
+    separate from `readPixel()` and share none of its buffers, so this delete can
+    proceed without touching them.
 - **What gets deleted (chrome side / config / UI):**
   - `zen.page-tint.color-source` and its dropdown (one value left is the one
     behaviour).
@@ -475,8 +484,9 @@ Decisions taken (do not relitigate without reason):
   - The declared sampler (`readDeclaredBackground`), the cache, the rAF
     coalescing, the pref observer, the readable-foreground pick, the
     saturation / brightness / contrast / lightness adjustments, the strength
-    overlay, the per-site disable list, and the new outline
-    ([ZPT-019](#zpt-019)).
+    overlay, the per-site disable list, the new outline
+    ([ZPT-019](#zpt-019)) **and its page-color sampler**
+    ([ZPT-023](#zpt-023), the one exception above).
   - **OS `prefers-color-scheme` flips:** the chrome clears the cache and
     forces a resample, and the frame re-reads the computed style. With the
     poll loop gone this becomes the ONLY path for a page whose background
@@ -497,8 +507,10 @@ Decisions taken (do not relitigate without reason):
   window edge). [ZPT-020](#zpt-020) was this request, mis-phrased; it is merged
   here.
 - **Knock-on effects:**
-  - Archived ZPT-004 (`drawWindow` may be removed from Gecko) becomes moot —
-    the only consumer of `drawWindow` is gone. Close it.
+  - Archived ZPT-004 (`drawWindow` may be removed from Gecko) is **no longer
+    moot**: the outline sampler still calls it ([ZPT-023](#zpt-023)). Keep it
+    open; it now concerns only the outline color (the favicon remains the
+    fallback if `drawWindow` disappears).
   - [ZPT-018](#zpt-018) (per-site source override) becomes moot — there is no
     second source to override. Close it.
   - Archived ZPT-009 (opposite-hue averaging to grey) is deleted along with
@@ -554,7 +566,7 @@ Decisions taken (do not relitigate without reason):
 
 ### ZPT-023
 **Outline color: use the page's own visible colors instead of the favicon**
-- **Status:** open · **Priority:** 3 · **Sev:** med · **Area:** frame.js (sampling) + tint.uc.js (plumbing)
+- **Status:** done · **Priority:** 3 · **Sev:** med · **Area:** frame.js (sampling) + tint.uc.js (plumbing)
 - **Symptom:** the outline's color comes from the site's favicon, and in
   practice that is often the wrong answer: a monochrome logo gives no color at
   all (the neutral fallback), a multi-brand host gives another brand's color,
@@ -592,9 +604,26 @@ Decisions taken (do not relitigate without reason):
   undoing the other.
 - **Depends on:** [ZPT-022](#zpt-022) — make the outline optional first, so a
   bad color cannot hurt anyone while the source is being reworked.
-- **Refs:** [ZPT-019](#zpt-019) (the favicon implementation this replaces),
-  [ZPT-021](#zpt-021) (the cleanup that deletes the pixel path), the
-  `content` source's grid sampler in `frame.js`, the cache rules in
+- **Decision:** the **dominant chromatic color from the page's own pixels**, with
+  the favicon kept as the fallback (the chain the sketch asked for). `frame.js`
+  gained a dedicated `readOutlineColor()` — its own 32×32 grid, its own canvas,
+  one `drawWindow` of the whole viewport — and the color travels in the existing
+  theme message and the existing per-URL cache entry. The favicon is only fetched
+  when the page yields no color, so most pages no longer pay for it at all.
+  The "favicon as a hint" refinement was not needed to meet the goal: the page's
+  version is used directly, and the brand color is the fallback when there is
+  none. The sampler is gated by `config.outline`, so switching the outline off
+  still leaves the declared path free of compositor reads.
+- **Reconciliation with [ZPT-021](#zpt-021) (done here):** the outline sampler is
+  the **one** piece of pixel code that survives the cleanup. It is separate from
+  `readPixel()`/`reduceGrid()` by design — it answers a different question and
+  does not share their buffers — so ZPT-021 can still delete the tint's pixel
+  path, the ambient path and the gradient while leaving this intact. The ZPT-021
+  entry now records that exception.
+- **Done in:** ZPT-D010.
+- **Refs:** [ZPT-019](#zpt-019) (the favicon implementation this replaces as the
+  primary source), [ZPT-021](#zpt-021) (the cleanup that keeps only this sampler),
+  [ZPT-022](#zpt-022) (the switch that gates it), the cache rules in
   `AGENTS.md`.
 
 ---
@@ -605,6 +634,29 @@ Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
 _(The tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D010
+**Outline color from the page's own visible colors** — `done`
+- `frame.js` gained `readOutlineColor()`: a dedicated 32×32 grid on its own
+  canvas, one `drawWindow` of the **whole** viewport, smoothing left on so text
+  and fringes dissolve. The grid is counted by 12 hue families; cells that are
+  grey, near-black/white, or within a channel distance of the page's own
+  background never count. The most common family wins, then its lightness is
+  pushed ~0.22 away from the background (in the direction it already leans) and
+  its saturation gets a 0.45 floor.
+- The color is sampled on **either** tint source — the tint follows the declared
+  background, the outline follows what the page looks like — and is gated by
+  `config.outline`, so switching the outline off leaves the declared path
+  genuinely free of compositor reads.
+- `outlineColor` travels in the existing `zen-page-tint:theme` message and the
+  existing per-URL cache entry (`{ bg, edges, outlineColor }`): a cache hit
+  restores it with zero IPC. The favicon resolver stays as the fallback for pages
+  with no usable color, so the chain is page color → favicon → tint foreground →
+  nothing. Most pages no longer fetch a favicon at all.
+- Toggling the outline (or crossing width 0) clears the cache and forces one
+  sample, because it changes what a sample yields; `sampleSignature()` gained
+  `outline` so the frame re-samples on the new config.
+- Version `1.3.0` → `1.4.0` in `theme.json` **and** the `// @version` header.
 
 ### ZPT-D009
 **Page outline is optional: a real on/off switch** — `done`

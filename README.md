@@ -28,7 +28,7 @@ Those come apart more often than you'd think:
 
 And when the page declares *nothing* (a transparent `<body>` and `<html>`), the mod doesn't guess. It clears the tint and hands the frame back to your Zen theme, because "no declared background" is a real answer and inventing white for it would be worse than being quiet.
 
-**…but not so much that you lose track of where the page ends.** Continuity taken too far erases the boundary: a sidebar and a page in the same color read as one flat field. So the boundary is **drawn** — a squircle stroke around the whole page viewport, on all four sides, continuously, in the site's own color. See [The page outline](#the-page-outline).
+**…but not so much that you lose track of where the page ends.** Continuity taken too far erases the boundary: a sidebar and a page in the same color read as one flat field. So the boundary is **drawn** — a squircle stroke around the whole page viewport, on all four sides, continuously, in a color the page itself contains. See [The page outline](#the-page-outline).
 
 ## Two color sources
 
@@ -50,7 +50,7 @@ And when the page declares *nothing* (a transparent `<body>` and `<html>`), the 
 
 **Add it locally from this repo:** Sine settings → **"Add your own locally from a GitHub repo"** → paste `https://github.com/Zack-Bloodshot/zen-tint` → enable → restart. A local (unvetted) install needs `sine.allow-unsafe-js = true` in `about:config` for the script portion to load.
 
-> **No telemetry, no tracking** — the script reads the current page's background color locally, over a content-script bridge, and the outline's color comes from the site's own favicon (the browser has already fetched it; at worst it is one request to the site you are looking at). Nothing is sent anywhere.
+> **No telemetry, no tracking** — the script reads the current page's background color and its visible colors locally, over a content-script bridge; the outline is colored from what is already painted on the page. The favicon (used only when the page has no color of its own) has already been fetched by the browser; at worst it is one request to the site you are looking at. Nothing is sent anywhere.
 
 ## Configuration
 
@@ -74,7 +74,7 @@ Everything is configurable from the **Sine settings panel** for this mod (Zen �
 | `zen.page-tint.frame-gap` | `5` | Gap (px) between the content area and the window edge in non-compact mode. Compact mode stays flush so Zen's screen-edge hover controls remain reachable. Extremely large values can push the page viewport entirely offscreen. |
 | `zen.page-tint.frame-radius` | `14` | Content corner radius (px). |
 | `zen.page-tint.page-outline` | `true` | Draw the **page outline** — the squircle boundary around the whole page viewport — or not. Off gives you the tint and nothing else, and the page keeps its own corners. Applies instantly. |
-| `zen.page-tint.page-outline-width` | `2` | Thickness (px) of the **drawn boundary** — a squircle stroke around the whole page viewport, in the site's own color — see [The page outline](#the-page-outline). `0` also turns it off (the page goes back to its own corners). |
+| `zen.page-tint.page-outline-width` | `2` | Thickness (px) of the **drawn boundary** — a squircle stroke around the whole page viewport, in a color the page contains — see [The page outline](#the-page-outline). `0` also turns it off (the page goes back to its own corners). |
 
 **Need a restart** (read once at load):
 
@@ -92,17 +92,17 @@ The `--zpt-frame-shadow` drop shadow is still a CSS knob in `style.css` `:root` 
 
 ## The page outline
 
-The tint makes the chrome continuous with the page. Taken too far, that erases where the page **ends** — a sidebar and a page in the same color read as one flat field. So the boundary is drawn rather than implied: a **squircle stroke around the whole page viewport**, on all four sides, continuously, in the site's own color.
+The tint makes the chrome continuous with the page. Taken too far, that erases where the page **ends** — a sidebar and a page in the same color read as one flat field. So the boundary is drawn rather than implied: a **squircle stroke around the whole page viewport**, on all four sides, continuously, in a color the page itself contains.
 
 - **Where.** On the page's outermost pixels, all the way round — including the edge that faces the sidebar. (The v1.1.0 hairline was drawn in the frame gap instead, and the gap only exists on three sides: the line vanished on exactly the edge it was wanted on.)
 - **What shape.** A true squircle — continuous corners, not the circular arcs `border-radius` produces. Firefox's `corner-shape` draws it; the radius is `--zpt-page-outline-radius` in `style.css`.
-- **What color.** The **site's** color, taken from its favicon. A favicon *is* the brand mark; a page's `<meta name="theme-color">` is usually just its background (GitHub's is `rgb(30,35,39)`), and scanning CSS custom properties means guessing at names across every framework. The favicon is also per-*site*, so it is fetched once per host and reused by every tab on it.
-- **Fallback chain.** Site color → the tint's own foreground (a neutral line that flips light/dark with the page) → nothing at all. A monochrome logo has no color to give, so those sites get the neutral line.
-- **On, off, and how thick.** `zen.page-tint.page-outline` is the switch (`true` by default); `zen.page-tint.page-outline-width` is the thickness in px (2 by default, `0` also means off). Both apply instantly. Turning the outline off is a real off: no line, no outline element, no favicon lookup, and the page gets its own rounded corners back.
+- **What color.** A color **the page itself contains**, picked from its visible pixels: the viewport is reduced to a grid, the grid is counted by hue family, and greys plus anything close to the page's own background are ignored — so the line is drawn in a color that is already on screen and cannot vanish into the page. The winner is clamped to read against that background (a dark line on a light page, a light one on a dark page).
+- **Fallback chain.** Page color → the site's **favicon** (its brand mark, for pages with no color of their own: monochrome logos, all-background pages) → the tint's own foreground (a neutral line that flips light/dark with the page) → nothing at all. The favicon is per-*site*, so it is fetched once per host and reused by every tab on it.
+- **On, off, and how thick.** `zen.page-tint.page-outline` is the switch (`true` by default); `zen.page-tint.page-outline-width` is the thickness in px (2 by default, `0` also means off). Both apply instantly. Turning the outline off is a real off: no line, no outline element, no color sampling or favicon lookup, and the page gets its own rounded corners back.
 
 It is a **border**, and a border is allowed to sit on top of the page's outermost pixels — that is what a border is. The *tint* is not: it only ever paints chrome surfaces, and never the page. The two jobs stay separate.
 
-**Where the color comes from, in detail.** The icon is drawn to a 32×32 canvas (no smoothing — blending while scaling invents in-between shades) and the pixels are counted: transparent, near-black, white and grey pixels never count, so a half-white half-green logo is green. The most common exact shade wins when it clearly leads; otherwise the biggest hue family is averaged, so a gradient that crosses a family border isn't split in two. The result is clamped into a visible lightness band. The technique is borrowed from [zen-tab-groups](https://github.com/oom333/zen-tab-groups) (MIT) — see [Credits](#credits).
+**Where the color comes from, in detail.** The page read draws the whole viewport into a 32×32 grid, counting cells by hue family (12 families of 30°). A cell is skipped when it is grey (low saturation), near-black or near-white, or within a small channel distance of the page's own background — that last rule is what stops a flat colored page from picking *itself* as the outline. The most common remaining family wins; the line's lightness is then pushed at least ~0.22 away from the background's, in the direction the color already leans, and its saturation gets a floor so it never reads as a grey rule. Canvas smoothing is left on for this read: a cell is an average of its patch, so thin text and anti-aliasing fringes dissolve while a solid area keeps its hue. The favicon fallback is drawn to a 32×32 canvas with smoothing **off** (a logo is flat shades, and blending invents in-between ones) and counted the same way; transparent, near-black, white and grey pixels never count, so a half-white half-green logo is green, and the most common exact shade wins when it clearly leads. The favicon technique is borrowed from [zen-tab-groups](https://github.com/oom333/zen-tab-groups) (MIT) — see [Credits](#credits).
 
 ## Directional ambient gradient
 
@@ -149,14 +149,14 @@ Note this *reads* the video; it doesn't amplify anything. Userstyles that crank 
 ## Known limitations
 
 - **A page that paints its background on a wrapper element gets no tint.** Only `<body>` and `<html>` are read. A color set on a `<div>` wrapper (common in SPAs) resolves to "no declared background", so the chrome falls back to your Zen theme instead of blending in. Leave `color-source` at `content` for those sites, or add the host to `zen.page-tint.disable-hosts`.
-- **The outline's color is per-site, not per-page.** It comes from the favicon, so `github.com` and `gist.github.com` can differ, and a site whose logo changes with its theme gets the color of whichever logo was cached first.
-- **A monochrome logo gives no color.** Black, white and grey icons are deliberately ignored (a dark logo on a transparent background is not a brand color), so those sites fall back to the neutral line derived from the page's own light/dark.
+- **The outline's fallback color is per-site, not per-page.** The page's own colors are preferred and are per-page, but when a page has none the favicon is used: `github.com` and `gist.github.com` can differ, and a site whose logo changes with its theme gets the color of whichever logo was cached first.
+- **A monochrome page falls back to the brand, then to a neutral line.** If neither the page's pixels nor its logo yield a color (black, white and grey are deliberately ignored), the outline uses a neutral tone derived from the page's own light/dark.
 - **A page whose background is an image or a gradient reads as transparent.** `background-image` is not a color, and the computed `background-color` underneath it is usually `rgba(0, 0, 0, 0)` — so the chrome clears to your Zen theme.
 - **`color-source` is global, not per-site.** Some sites need the visible-pixel path even when you prefer the declared background — Gmail's dark mode is the classic case, where the declared background is the light one and the app paints dark. There is no per-host override for the source; use `zen.page-tint.disable-hosts` for the sites that need the other behavior.
 - **Boost edits on the currently open page require a refresh.** When you live-edit a [Zen Boost](https://zen-browser.app/) on a page that's already loaded, the chrome tint won't update until you refresh the page (or switch to another tab and back). Boosts apply styling via `CSSStyleSheet.insertRule` and browser-level user-sheetsheets, neither of which fires a DOM `MutationObserver`. Background polling would catch it but at a constant CPU cost that didn't feel worth it — open to revisiting if folks ask.
 - **YouTube in fullscreen video** mode drops the `#cinematics` element the ambient path gates on, so it falls back to the centered viewport read — which in fullscreen is the video anyway, just without the letterbox trimming. Outside fullscreen the ambient path handles it.
 - **Live mode doesn't auto-detect video inside cross-origin `<iframe>` embeds** (the common YouTube/Vimeo/Spotify embed on a third-party page). That `<video>` lives in a separate browsing context, so its play/pause events never reach the parent document and auto-detect can't see it. The tint *would* follow it correctly if polling ran — only the trigger is missing. Workaround: add the host to `zen.page-tint.live-mode-hosts` to force always-on polling there. A site's own pages (e.g. youtube.com itself, where the `<video>` is same-origin) work without this.
-- **`drawWindow` is flagged non-standard in MDN** and may be removed in a future Gecko. If that happens, the `content` source loses its pixel path (the meta-tag and computed-style fallbacks still work, but Gmail-class accuracy is lost). The default `page-background` source never used it, so it is unaffected. No drop-in replacement exists today.
+- **`drawWindow` is flagged non-standard in MDN** and may be removed in a future Gecko. If that happens, the `content` source loses its pixel path (the meta-tag and computed-style fallbacks still work, but Gmail-class accuracy is lost) and the outline falls back to the favicon, then to the neutral line. The default `page-background` tint never used it, so the tint itself is unaffected.
 
 ## How it works
 
@@ -168,7 +168,7 @@ Note this *reads* the video; it doesn't amplify anything. Userstyles that crank 
 5. Cache is bounded LRU (3000 entries) keyed by `origin + pathname`. Cleared on OS color-scheme change so prefers-color-scheme-aware sites re-sample fresh.
 6. Sampled color is adjusted (saturation / lightness clamp) and the foreground (black or white) is picked against the result via Rec 601 luminance for max contrast.
 7. A transient Zen Glance keeps its parent tab's tint while the parent remains visible behind it. Expanding the Glance into a normal tab hands tint ownership to the child and samples it normally.
-8. The page outline is positioned over the browser's rect (a fixed-position element in the chrome document, moved on every layout change) and colored from the site's favicon, which is fetched once per host and cached in `zen.page-tint.icon-colors`.
+8. The page outline is positioned over the browser's rect (a fixed-position element in the chrome document, moved on every layout change) and colored from the page's own visible colors, which arrive with the theme sample and are cached with it. When the page has no usable color, the site's favicon is fetched once per host and cached in `zen.page-tint.icon-colors`.
 
 **`frame.js`** runs in the content process. The color source decides which chain runs:
 
@@ -177,6 +177,8 @@ Note this *reads* the video; it doesn't amplify anything. Userstyles that crank 
 2. `html.backgroundColor` — the computed color of `<html>`.
 
 Neither means the page declares no background: the tint clears and the frame returns to your Zen theme. Normalized to canonical `rgb()` via the canvas color parser, so hex/HSL/named all work, and a resolved `rgba(…, 0)` counts as "no color".
+
+The one compositor read on this path is the **outline's** color sample, and only while the outline is switched on. With the outline off, `page-background` really is two computed styles and nothing else.
 
 **`content`** — the painted pixels, first match wins:
 0. **YouTube's video picture box** (host-gated to `*.youtube.com`, gated on `#cinematics` existing, only when `youtube-ambient` is on) — a `drawWindow` read of just the painted video, letterbox bars excluded geometrically. See [YouTube ambient mode](#youtube-ambient-mode) for why this reads the compositor rather than YouTube's canvas. Falls through to step 1 whenever the gate isn't satisfied or the player is scrolled out of view.
@@ -237,7 +239,8 @@ What this fork adds:
 - **The `page-background` color source** — the chrome takes the page's *declared* background, and it is the default.
 - **Live re-sample on a source change** — flipping the source re-tints the current tab immediately instead of waiting for a mutation, a poll tick, or a tab switch.
 - **Clear-on-empty** — a page that declares no background hands the frame back to your Zen theme instead of guessing white.
-- **The drawn page outline** — a squircle boundary around the whole viewport, in the site's own color, taken from its favicon.
+- **The drawn page outline** — a squircle boundary around the whole viewport, in a color the page itself contains (with the site's favicon as the fallback).
+- **The outline's color from the page, not the logo** — the line takes the dominant chromatic color actually painted on the page, excluding greys and the page's own background, instead of asking the favicon.
 
 The favicon-color algorithm is adapted from **[zen-tab-groups](https://github.com/oom333/zen-tab-groups)** by [oom333](https://github.com/oom333) (MIT) — see [LICENSE](LICENSE) for the retained copyright notice.
 

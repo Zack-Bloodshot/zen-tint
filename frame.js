@@ -1,7 +1,8 @@
 // Zen Tint — frame script
 // Loaded into the content process via mm.loadFrameScript.
-// Reads the page's effective background color, observes theme-related DOM mutations,
-// re-samples on load/pageshow, and pushes results to the chrome process via sendAsyncMessage.
+// Reads the page's effective background color and the color for the drawn page
+// outline, observes theme-related DOM mutations, re-samples on load/pageshow, and
+// pushes results to the chrome process via sendAsyncMessage.
 //
 // Lifecycle:
 //   - The persistent singleton (config + teardown message listeners, stored on the
@@ -20,7 +21,8 @@
 //     rely on a single format.
 //   - drawWindow() is the ground-truth fallback; it's flagged non-standard in MDN but is
 //     still present in current Gecko. If it disappears upstream, this script keeps working
-//     for the meta-tag and computed-style paths but loses Gmail-class accuracy.
+//     for the meta-tag and computed-style paths but loses Gmail-class accuracy, and the
+//     outline's page-color sample falls back to the favicon on the chrome side.
 
 (() => {
   'use strict';
@@ -56,6 +58,23 @@
     //     then average non-transparent cells for the dominant central tone.
     const PIXEL_SAMPLE_FRACTION = 0.6;
     const PIXEL_SAMPLE_GRID = 16;
+    // The outline's own read is a separate, coarser question: "which colours are
+    // visible on this page?", not "what is the page's average colour?". It uses
+    // its own grid and canvas (see readOutlineColor) so the tint path's buffer
+    // and geometry stay untouched.
+    const OUTLINE_SAMPLE_GRID = 32;
+    // A cell must be this saturated to count as a colour rather than a grey.
+    // Cells are averages of a ~45x28 patch (smoothing is left ON for this read),
+    // which washes out thin text and one-pixel fringes but keeps solid areas —
+    // a button, a header, a photo — at close to their real colour.
+    const OUTLINE_MIN_SATURATION = 0.25;
+    // Minimum max-channel distance from the page's own background. A cell this
+    // close to the background would draw a line that vanishes into it.
+    const OUTLINE_BG_DISTANCE = 32;
+    // How many cells a hue family needs before it is believable. Low on purpose:
+    // a small solid accent (one button) covers only a couple of cells at this
+    // resolution, and a brand colour is usually a minority of the page.
+    const OUTLINE_MIN_CELLS = 2;
     const VIDEO_CHECK_DEBOUNCE_MS = 250;
     const SAMPLE_DEBOUNCE_MS = 250;
     // Safety floor only — guards against an absurd pref value (rate = 5) pinning a
@@ -104,6 +123,42 @@
     function linearToSrgb8(v) {
       const s = v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
       return Math.max(0, Math.min(255, Math.round(s * 255)));
+    }
+
+    // HSL is the space the outline pick works in: hue puts a cell in a family,
+    // saturation decides whether it is a colour at all, and lightness decides
+    // whether it will read against the page. Small, dependency-free versions —
+    // the chrome side has its own copies for the tint transform.
+    function rgbToHsl(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      const d = max - min;
+      if (d === 0) return { h: 0, s: 0, l };
+      const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      let h;
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      else if (max === g) h = ((b - r) / d + 2) / 6;
+      else h = ((r - g) / d + 4) / 6;
+      return { h, s, l };
+    }
+    function hslToRgb(h, s, l) {
+      if (s === 0) { const v = Math.round(l * 255); return { r: v, g: v, b: v }; }
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      const hue = (t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+      };
+      return {
+        r: Math.round(hue(h + 1 / 3) * 255),
+        g: Math.round(hue(h) * 255),
+        b: Math.round(hue(h - 1 / 3) * 255),
+      };
     }
 
     // In LIGHT mode, vivid cells outweigh gray ones so a saturated minority isn't
@@ -201,6 +256,13 @@
         // Compute per-edge colors? Off unless the chrome side has a non-zero
         // ambient spread, so the regional accumulate is skipped when unused.
         edges: false,
+        // Sample a color for the drawn outline from the page's own pixels? This
+        // is INDEPENDENT of the tint source: the tint can follow the declared
+        // background while the outline still reads the page's visible colors.
+        // Off when the outline is switched off, which is what keeps the declared
+        // path's "two computed styles, no compositor read" promise whenever the
+        // outline is not drawing. Defaults true to match the pref default.
+        outline: true,
       },
       instance: null,
       configListener: null,
@@ -221,6 +283,7 @@
             console.log('[zen-tint frame] instance started | ytAmbient =', this.config.ytAmbient,
               '| lightAverage =', this.config.lightAverage,
               '| colorSource =', this.config.colorSource,
+              '| outline =', this.config.outline,
               '| liveRateMs =', this.config.liveRateMs);
           } catch {}
         }
@@ -230,7 +293,7 @@
       // how often we poll. If one of these changes, the color already on screen
       // was produced by different rules, so it has to be redone.
       sampleSignature(cfg) {
-        return `${cfg.colorSource}|${cfg.ytAmbient}|${cfg.lightAverage}|${cfg.edges}`;
+        return `${cfg.colorSource}|${cfg.ytAmbient}|${cfg.lightAverage}|${cfg.edges}|${cfg.outline}`;
       },
 
       applyConfig(data) {
@@ -247,6 +310,7 @@
           // a mode this script doesn't implement.
           colorSource: (data && data.colorSource === 'content') ? 'content' : 'page-background',
           edges: !!(data && data.edges),
+          outline: !!(data && data.outline),
         };
         if (this.instance) {
           this.instance.applyConfig();
@@ -394,6 +458,116 @@
           return reduceGrid(img, PIXEL_SAMPLE_GRID, singleton.config.lightAverage, singleton.config.edges);
         } catch (e) {
           try { ctx.setTransform(1, 0, 0, 1, 0, 0); } catch {}
+          return null;
+        }
+      }
+
+      // ---- The outline's color, from the page's own visible pixels ----
+      //
+      // ZPT-023. The outline is drawn ON the page, so the color that reads best
+      // is one the page actually contains: the line belongs to the page and
+      // cannot disagree with what is on screen. The favicon (the chrome side's
+      // fallback) answers a different question — "what is this site's brand?" —
+      // which is often wrong here: a monochrome logo gives nothing, a
+      // multi-brand host gives another brand's color, and a logo's color need
+      // not be painted anywhere on the page.
+      //
+      // This is a SEPARATE read from readPixel() on purpose. readPixel() answers
+      // "what color is the page" by averaging, and an average is exactly the
+      // wrong answer for a line that must be visible AGAINST the page: it would
+      // come back as the page's own background and vanish into it. This read
+      // counts cells by hue family instead and ignores anything close to the
+      // background.
+      let outlineCanvas = null;
+      let outlineCtx = null;
+      function ensureOutlineCanvas() {
+        if (outlineCtx) return true;
+        try {
+          outlineCanvas = content.document.createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
+          outlineCanvas.width = OUTLINE_SAMPLE_GRID;
+          outlineCanvas.height = OUTLINE_SAMPLE_GRID;
+          // Same reason as the tint canvas: this buffer is read back on every
+          // sample, so keep it in software memory instead of stalling the GPU.
+          outlineCtx = outlineCanvas.getContext('2d', { willReadFrequently: true });
+          return !!outlineCtx;
+        } catch (e) { outlineCanvas = null; outlineCtx = null; return false; }
+      }
+
+      // Count the grid's cells by hue family and take the biggest chromatic one.
+      // `bg` is our canonical rgb() string for the page's own background, used
+      // for the two exclusion rules: a cell that IS the background never counts,
+      // and the winner is pushed to a lightness that reads against it.
+      function extractOutlineColor(img, bg) {
+        const bgRgb = parseRgbTriplet(bg);
+        const families = Array.from({ length: 12 }, () => ({ n: 0, r: 0, g: 0, b: 0 }));
+        for (let i = 0; i < img.length; i += 4) {
+          if (img[i + 3] === 0) continue;
+          const r = img[i], g = img[i + 1], b = img[i + 2];
+          const hsl = rgbToHsl(r, g, b);
+          if (hsl.s < OUTLINE_MIN_SATURATION) continue;   // grey, not a colour
+          if (hsl.l < 0.12 || hsl.l > 0.92) continue;     // near-black / white
+          if (bgRgb && Math.max(
+            Math.abs(r - bgRgb.r), Math.abs(g - bgRgb.g), Math.abs(b - bgRgb.b),
+          ) < OUTLINE_BG_DISTANCE) continue;              // this IS the background
+          // 12 families of 30°, shifted so pure red sits in the middle of one
+          // (the same bucketing the chrome side uses for the favicon fallback).
+          const f = families[Math.floor(((hsl.h * 360 + 15) % 360) / 30)];
+          f.n++; f.r += r; f.g += g; f.b += b;
+        }
+
+        // Most common family wins. No dominance ratio: unlike the favicon (where
+        // several exact shades compete inside one logo), the families here are
+        // regions of the page, and the most common one is the answer even when
+        // the runner-up is close.
+        let best = null;
+        for (const f of families) {
+          if (f.n >= OUTLINE_MIN_CELLS && (!best || f.n > best.n)) best = f;
+        }
+        if (!best) return null;
+
+        const base = rgbToHsl(best.r / best.n, best.g / best.n, best.b / best.n);
+        const bgL = bgRgb ? rgbToHsl(bgRgb.r, bgRgb.g, bgRgb.b).l : 0.5;
+        // Visibility against the page it is drawn on: stay at least ~0.22
+        // lightness away from the background, in whichever direction the color
+        // already leans, so the hue survives. Saturation gets the same floor the
+        // favicon path uses — a washed-out line reads as a grey rule.
+        const l = bgL >= 0.5
+          ? Math.max(0.18, Math.min(base.l, bgL - 0.22))
+          : Math.min(0.88, Math.max(base.l, bgL + 0.22));
+        const s = Math.max(base.s, 0.45);
+        const out = hslToRgb(base.h, s, l);
+        return `rgb(${out.r}, ${out.g}, ${out.b})`;
+      }
+
+      // Draw the whole viewport into the outline grid and pick from it. The whole
+      // viewport (not readPixel's central 60%) because the outline frames the
+      // whole page — a color at the edge is as much a page color as one in the
+      // middle. Canvas smoothing is deliberately LEFT ON: each cell is then an
+      // average of its patch, so thin text and anti-aliasing fringes dissolve
+      // instead of registering as a color, while a solid area keeps its hue.
+      //
+      // Under the content source this is a SECOND draw (readPixel already drew
+      // its own grid). That path is opt-in and already paid for a compositor
+      // read; duplicating the buffer bookkeeping to save it would couple the two
+      // reductions, which are deliberately different questions.
+      function readOutlineColor(bg) {
+        if (!bg) return null;   // no tint means no outline; skip the draw entirely
+        if (!ensureOutlineCanvas()) return null;
+        try {
+          const w = content.innerWidth | 0;
+          const h = content.innerHeight | 0;
+          if (w <= 0 || h <= 0) return null;
+          if (!outlineCtx.drawWindow) return null;
+          const G = OUTLINE_SAMPLE_GRID;
+          outlineCtx.setTransform(1, 0, 0, 1, 0, 0);
+          outlineCtx.clearRect(0, 0, G, G);
+          outlineCtx.setTransform(G / w, 0, 0, G / h, 0, 0);
+          outlineCtx.drawWindow(content, 0, 0, w, h, 'rgba(0, 0, 0, 0)');
+          outlineCtx.setTransform(1, 0, 0, 1, 0, 0);
+          const img = outlineCtx.getImageData(0, 0, G, G).data;
+          return extractOutlineColor(img, bg);
+        } catch (e) {
+          try { outlineCtx.setTransform(1, 0, 0, 1, 0, 0); } catch {}
           return null;
         }
       }
@@ -562,7 +736,17 @@
           // (yt-ambient, pixel, meta, body/html, walk) may run under it.
           if (singleton.config.colorSource === 'page-background') {
             const declared = readDeclaredBackground(content.document);
-            return { bg: declared.bg, edges: null, source: declared.source };
+            // The outline is sampled from the PIXELS even under the declared
+            // source. The two questions are independent: the tint asks what the
+            // page DECLARES, the outline asks what the page LOOKS like. This is
+            // the one compositor read the declared path makes, and it is skipped
+            // entirely when the outline is switched off (config.outline).
+            return {
+              bg: declared.bg,
+              edges: null,
+              outlineColor: singleton.config.outline ? readOutlineColor(declared.bg) : null,
+              source: declared.source,
+            };
           }
 
           const doc = content.document;
@@ -615,9 +799,12 @@
             } catch (e) {}
           }
 
-          return { bg, edges, source };
+          // Same independent question as under the declared source: the tint
+          // follows the content, the outline follows a color found on the page.
+          const outlineColor = singleton.config.outline ? readOutlineColor(bg) : null;
+          return { bg, edges, outlineColor, source };
         } catch (e) {
-          return { bg: null, edges: null, source: 'error' };
+          return { bg: null, edges: null, outlineColor: null, source: 'error' };
         }
       }
 
@@ -664,6 +851,11 @@
             // the edges move with it, so gating on both would fire far more often
             // for a change nobody can see.
             edges: r.edges,
+            // The outline's color, picked from the page's own pixels — null means
+            // "no usable color on this page", and the chrome falls back to the
+            // site's favicon. Sent with the same sample so a cache hit restores
+            // both, with no second round trip.
+            outlineColor: r.outlineColor || null,
             source: r.source,
             href: content.location && content.location.href,
           });
@@ -852,6 +1044,7 @@
         // Drop canvas refs so a torn-down document's backing buffers aren't held
         // alive by this closure until the whole instance is collected.
         canvas = null; ctx = null;
+        outlineCanvas = null; outlineCtx = null;
       }
 
       inst.start = start;

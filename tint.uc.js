@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Zen Tint
 // @description    Zen chrome that continues the page's background color
-// @version        1.3.0
+// @version        1.4.0
 // ==/UserScript==
 
 (() => {
@@ -117,11 +117,12 @@
   //     opinionated thing the mod does, so it gets a real switch: the Sine panel
   //     shows a checkbox, not a number the user has to know means "off". While
   //     it is off the outline element is not even built — no DOM node, no
-  //     ResizeObserver, no favicon lookup, no site color variable.
+  //     ResizeObserver, no pixel read, no favicon lookup, no site color variable.
   //   zen.page-tint.page-outline-width (int px, default 2) → --zpt-page-outline-width
   //     The drawn boundary. A squircle stroke around the WHOLE page viewport —
-  //     all four sides, continuously — in the site's own primary color, taken
-  //     from its favicon. It replaces the old frame-separator hairline, which
+  //     all four sides, continuously — in a color the page contains (sampled
+  //     from its own visible pixels by frame.js), with the site's favicon as the
+  //     fallback. It replaces the old frame-separator hairline, which
   //     was drawn OUTSET in the frame gap: the gap only exists on three sides
   //     (the sidebar occupies the fourth), so the line vanished on exactly the
   //     edge it was wanted on, and a flat 1px rule cannot read as a shape.
@@ -441,15 +442,18 @@
     el.style.height = `${Math.max(0, rect.height - OUTLINE_WIDTH)}px`;
   }
 
-  // ---- The site's primary color, from its favicon ----
+  // ---- The site's primary color, from its favicon — the outline's FALLBACK ----
   //
-  // The outline's color is the SITE's color — the brand mark, not the page's
-  // idea of a background color. A page's <meta name="theme-color"> is usually
-  // its background (GitHub's is rgb(30,35,39)), and scanning CSS custom
-  // properties means guessing at property names across every framework. The
-  // favicon IS the brand mark, it is per-SITE (so it can be cached once per
-  // host and reused by every tab on that host), and reading it needs no content
-  // process at all: the chrome already has the tab, its icon and the host.
+  // The outline's first choice is a color found in the page's own pixels (frame.js
+  // samples it; see updateOutlineColor). The favicon answers the different
+  // question "what is this site's brand?", and it is the fallback for pages that
+  // have no usable color of their own (a monochrome page, a page that is all
+  // background). It is a good second choice for the reasons it always was: a
+  // page's <meta name="theme-color"> is usually its background (GitHub's is
+  // rgb(30,35,39)), scanning CSS custom properties means guessing at property
+  // names across every framework, and the favicon is per-SITE — cached once per
+  // host and reused by every tab on it — and needs no content process at all:
+  // the chrome already has the tab, its icon and the host.
   //
   // The algorithm is borrowed from zen-tab-groups (MIT, (c) 2026 oom333), which
   // colors its section headers from the site icon — see LICENSE.
@@ -650,9 +654,11 @@
     return job;
   }
 
-  // Ask for the site's color and paint it when it arrives. The color is
-  // written as a variable and CSS picks the fallback chain:
-  //   site color -> the tint's own foreground (the old hairline) -> nothing.
+  // Ask for the site's color and paint it when it arrives. Used as the FALLBACK
+  // when the page itself yielded no chromatic color (see updateOutlineColor).
+  // The color is written as a variable and CSS picks the fallback chain:
+  //   page color (from the frame) / site color (favicon) -> the tint's own
+  //   foreground (the old hairline) -> nothing.
   let lastSiteColor = null;
   function setSiteColor(color) {
     // Deduped: the same site comes back on every tab switch, and rewriting an
@@ -686,6 +692,22 @@
     }).catch(() => {});
   }
 
+  // The page's own color wins outright when the frame supplied one: it is drawn
+  // on the page by definition, needs no per-site cache, and skips the favicon
+  // round trip (and its "the outline color arrives a beat after the tint"
+  // caveat). Bumping the token invalidates any favicon lookup still in flight
+  // from the previous page — it would otherwise overwrite this answer when it
+  // lands. No page color (a monochrome page, or drawWindow unavailable) means
+  // the site's brand color is the fallback, exactly as before.
+  function updateOutlineColor(browser, pageColor) {
+    if (pageColor) {
+      outlineColorToken++;
+      setSiteColor(pageColor);
+      return;
+    }
+    requestOutlineColor(browser);
+  }
+
   // Keep the outline on the browser's rect as the layout moves (sidebar
   // expand/collapse, window resize, Zen's compact mode). The observer fires on
   // the browser element's SIZE change, which covers every one of those; the
@@ -707,7 +729,12 @@
   // an untinted page (about:, a disabled host, a page with no declared
   // background) gets no outline either. The attribute gate is in CSS; this
   // only moves and colors it.
-  function updateOutlineFor(browser) {
+  //
+  // `pageColor` is the color the frame script found in the page's own pixels.
+  // It is the preferred answer (the line is drawn ON the page, so a color the
+  // page contains belongs to it); the favicon is only the fallback when the page
+  // yielded no usable color.
+  function updateOutlineFor(browser, pageColor) {
     // Switched off (or width 0): there is nothing to move, color or observe,
     // and rebuilding the element on every tab switch would quietly undo the
     // toggle. Tear down anything left over and stop here — this is the guard
@@ -720,7 +747,7 @@
     showOutline(true);
     updateOutlineGeometry(browser);
     observeOutlineBrowser(browser);
-    requestOutlineColor(browser);
+    updateOutlineColor(browser, pageColor);
   }
 
   // The Glance overlay dims the parent page and covers the content area, so
@@ -869,20 +896,27 @@
       const key = cacheKey(sampled);
       const isCurrent = cacheKey(current) === key;
       const canApply = isCurrent && gBrowser.selectedBrowser === browser && !isTransientGlance(browser);
-      log('message received', { source: theme.source, bg: theme.bg, url: sampled });
+      log('message received', { source: theme.source, bg: theme.bg, outlineColor: theme.outlineColor, url: sampled });
 
       if (theme.bg) {
-        // Cache the whole sampled theme (color + directional edges), not just the
-        // color: a cache hit has to be able to restore the gradient too, or
-        // revisiting a tab would silently drop to a flat tint.
-        cacheSet(key, { bg: theme.bg, edges: theme.edges || null });
+        // Cache the whole sampled theme (color + directional edges + the outline's
+        // page color), not just the color: a cache hit has to be able to restore
+        // all of it, or revisiting a tab would silently drop to a flat tint and
+        // the favicon fallback.
+        const entry = {
+          bg: theme.bg,
+          edges: theme.edges || null,
+          outlineColor: theme.outlineColor || null,
+        };
+        cacheSet(key, entry);
         if (canApply) {
-          applyTheme({ bg: theme.bg, edges: theme.edges || null });
+          applyTheme(entry);
           // The outline is updated OUTSIDE applyTheme: applyTheme dedupes
           // same-colored pages (most pages are white or one of a few greys),
-          // but the outline's color belongs to the SITE, so two white pages on
-          // different hosts still need different outlines.
-          updateOutlineFor(browser);
+          // but the outline's color comes from the page's own pixels, and two
+          // white pages can hold different colors. It falls back to the site's
+          // favicon when the page yielded none.
+          updateOutlineFor(browser, entry.outlineColor);
           log('applied', { bg: theme.bg, edges: !!theme.edges });
         }
       } else if (canApply) {
@@ -962,6 +996,11 @@
         // Under the page-background source there is no grid sample at all, so the
         // edge colors could never be computed — asking for them would be a lie.
         edges: AMBIENT_SPREAD > 0 && COLOR_SOURCE !== PAGE_BACKGROUND,
+        // Ask the frame to sample the outline's color from the page's own pixels.
+        // Independent of the tint source, and off when the outline is off — that
+        // is what keeps the declared path free of compositor reads when nothing
+        // will draw the line.
+        outline: outlineOn(),
       });
     } catch (e) { log('config message send failed', e); }
   }
@@ -1025,7 +1064,7 @@
     const hit = cacheGet(key);
     if (hit !== undefined) {
       applyTheme(hit);
-      updateOutlineFor(browser);
+      updateOutlineFor(browser, hit.outlineColor);
       // The cache is keyed by URL, not browser, so a hit can land on a tab whose
       // content process never loaded frame.js (a duplicate-URL tab, or one whose
       // mm was recreated). Ensure the listener is live, and load the frame script
@@ -1190,10 +1229,21 @@
         case 'zen.page-tint.frame-radius':
           applyCssVarPrefs();
           break;
-        case 'zen.page-tint.page-outline':
+        case 'zen.page-tint.page-outline': {
+          const wasOn = outlineOn();
           OUTLINE_ENABLED = prefBool('zen.page-tint.page-outline', true);
           applyCssVarPrefs();
           applyOutlineState();
+          // The frame samples the outline color only while something will draw
+          // it (config.outline), so the switch changes WHAT a sample yields.
+          // Same propagation as a source change: cached entries are now the wrong
+          // shape, so clear and force one fresh sample — its miss path pushes the
+          // new config. Do NOT push config by iterating tabs (see the
+          // ambient-spread case for why).
+          if (outlineOn() !== wasOn) {
+            themeCache.clear();
+            scheduleSample(true);
+          }
           // The switch is expected to be instant, so the page on screen is
           // handled here rather than on the next tab switch. On: rebuild (or
           // re-measure) the element and its color. Off: tear the whole thing
@@ -1201,10 +1251,18 @@
           if (outlineOn()) updateOutlineFor(gBrowser.selectedBrowser);
           else removeOutlineElement();
           break;
-        case 'zen.page-tint.page-outline-width':
+        }
+        case 'zen.page-tint.page-outline-width': {
+          const wasOn = outlineOn();
           OUTLINE_WIDTH = clampInt(prefInt('zen.page-tint.page-outline-width', 2), 0, 8);
           applyCssVarPrefs();
           applyOutlineState();
+          // A width change is normally a pure re-measure. Crossing 0 flips the
+          // feature off/on, which changes the config the frame samples under.
+          if (outlineOn() !== wasOn) {
+            themeCache.clear();
+            scheduleSample(true);
+          }
           // The stroke width is half of the box inset, so the outline's box
           // has to be recomputed — and the page's own corner shape flips with
           // the attribute. Width 0 is "off" too, so it takes the same
@@ -1212,6 +1270,7 @@
           if (outlineOn()) updateOutlineGeometry(gBrowser.selectedBrowser);
           else removeOutlineElement();
           break;
+        }
         // Color-source changes invalidate every cached sample, since the cache
         // stores the resulting color rather than the pixels it came from. Clear
         // and force a fresh sample — same treatment as an OS color-scheme flip.
