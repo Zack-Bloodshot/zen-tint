@@ -55,6 +55,7 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-015](#zpt-015) | open | med | frame.js | Gmail: the declared background is not the visible surface |
 | [ZPT-016](#zpt-016) | open | low | frame.js | WhatsApp: partial mismatch |
 | [ZPT-017](#zpt-017) | done | low | style.css | Frame separator: a hairline so the page stays bounded |
+| [ZPT-018](#zpt-018) | open | med | tint.uc.js | No per-site color-source override |
 
 ---
 
@@ -247,6 +248,28 @@ Decisions taken (do not relitigate without reason):
 - **Invariant added:** the separator is drawn in the gap, never over the page's
   own pixels — see `AGENTS.md`.
 - **Done in:** ZPT-D007.
+
+### ZPT-018
+**No per-site color-source override**
+- **Status:** open · **Sev:** med · **Area:** tint.uc.js (prefs + config)
+- **Symptom:** `zen.page-tint.color-source` is global. A user who prefers the
+  declared background has no way to get the pixel path for the handful of sites
+  that need it (Gmail, WhatsApp, any app that paints its background on a
+  wrapper). The only escape today is `disable-hosts`, which turns the tint off
+  entirely rather than switching source.
+- **Why:** the source is decided per browser and pushed in the config message,
+  and `sendConfig()` ALREADY resolves a host list per URL — that's exactly how
+  `live-mode-hosts` forces always-on polling (`alwaysOn: LIVE_ALWAYS_ON ||
+  hostMatches(url, LIVE_HOSTS)`). So this is mostly a matter of resolving the
+  source against a host list instead of globally; the plumbing is already there.
+- **Options:**
+  - `zen.page-tint.content-hosts` — a host list that forces `content` for named
+    hosts (and optionally the inverse, `page-background-hosts`). Resolved in
+    `sendConfig()` exactly like the live-mode allowlist.
+  - Extend `disable-hosts` with a per-host mode instead of adding a list.
+- **Blocks:** the clean fix for [ZPT-015](#zpt-015) and
+  [ZPT-016](#zpt-016).
+- **Refs:** [ZPT-014](#zpt-014), the README's "global, not per-site" limitation.
 
 ---
 
