@@ -97,10 +97,16 @@
     "placeholder": "14"
   },
   {
+    "type": "checkbox",
+    "property": "zen.page-tint.page-outline",
+    "label": "Draw a page outline. A squircle stroke around the whole page viewport, in the site's own color (taken from its favicon) — the page's boundary, so the frame reads as continuous AND bounded. Turn it off for the tint and nothing else: the page keeps its own corners and no line is drawn.",
+    "defaultValue": true
+  },
+  {
     "type": "string",
     "value": "number",
     "property": "zen.page-tint.page-outline-width",
-    "label": "Page outline (px): a squircle stroke drawn around the whole page, in the site's own color (taken from its favicon). It is the page's boundary, so the frame reads as continuous AND bounded — on all four sides, including the edge against the sidebar. 0 = off.",
+    "label": "Page outline width (px): how thick the stroke is. Only applies while the outline above is on.",
     "defaultValue": 2,
     "placeholder": "2"
   },

@@ -73,7 +73,8 @@ Everything is configurable from the **Sine settings panel** for this mod (Zen �
 | `zen.page-tint.light-average` | `false` | Average **page** samples as light instead of as flat color (decode sRGB to linear, weight vivid cells above gray ones). Physically more accurate and noticeably brighter/more saturated on mixed pages. Applies to the `content` source only. |
 | `zen.page-tint.frame-gap` | `5` | Gap (px) between the content area and the window edge in non-compact mode. Compact mode stays flush so Zen's screen-edge hover controls remain reachable. Extremely large values can push the page viewport entirely offscreen. |
 | `zen.page-tint.frame-radius` | `14` | Content corner radius (px). |
-| `zen.page-tint.page-outline-width` | `2` | The **drawn boundary**: a squircle stroke around the whole page viewport, in the site's own color — see [The page outline](#the-page-outline). `0` = off (the page goes back to its own corners and no line is drawn). |
+| `zen.page-tint.page-outline` | `true` | Draw the **page outline** — the squircle boundary around the whole page viewport — or not. Off gives you the tint and nothing else, and the page keeps its own corners. Applies instantly. |
+| `zen.page-tint.page-outline-width` | `2` | Thickness (px) of the **drawn boundary** — a squircle stroke around the whole page viewport, in the site's own color — see [The page outline](#the-page-outline). `0` also turns it off (the page goes back to its own corners). |
 
 **Need a restart** (read once at load):
 
@@ -97,7 +98,7 @@ The tint makes the chrome continuous with the page. Taken too far, that erases w
 - **What shape.** A true squircle — continuous corners, not the circular arcs `border-radius` produces. Firefox's `corner-shape` draws it; the radius is `--zpt-page-outline-radius` in `style.css`.
 - **What color.** The **site's** color, taken from its favicon. A favicon *is* the brand mark; a page's `<meta name="theme-color">` is usually just its background (GitHub's is `rgb(30,35,39)`), and scanning CSS custom properties means guessing at names across every framework. The favicon is also per-*site*, so it is fetched once per host and reused by every tab on it.
 - **Fallback chain.** Site color → the tint's own foreground (a neutral line that flips light/dark with the page) → nothing at all. A monochrome logo has no color to give, so those sites get the neutral line.
-- **Width.** `zen.page-tint.page-outline-width`, 2px by default. `0` turns it off, and the page goes back to its own corners.
+- **On, off, and how thick.** `zen.page-tint.page-outline` is the switch (`true` by default); `zen.page-tint.page-outline-width` is the thickness in px (2 by default, `0` also means off). Both apply instantly. Turning the outline off is a real off: no line, no outline element, no favicon lookup, and the page gets its own rounded corners back.
 
 It is a **border**, and a border is allowed to sit on top of the page's outermost pixels — that is what a border is. The *tint* is not: it only ever paints chrome surfaces, and never the page. The two jobs stay separate.
 

@@ -110,10 +110,10 @@ These are load-bearing. Violating them is how this project regressed before
   `prefBool` / `prefInt` / `prefStr` helpers, each with its own `try`.
 - **Restart vs live prefs.** The live-mode group is read **once** at chrome-script
   load and needs a restart (Sine shows the restart toast via `"restart": true` in
-  `preferences.json`). The CSS-variable prefs, `zen.page-tint.color-source` and
-  `zen.page-tint.page-outline-width` are applied live through the
-  `zen.page-tint.` prefix observer. New prefs must land in the right bucket and
-  be annotated with the matching comment here.
+  `preferences.json`). The CSS-variable prefs, `zen.page-tint.color-source`,
+  `zen.page-tint.page-outline` and `zen.page-tint.page-outline-width` are applied
+  live through the `zen.page-tint.` prefix observer. New prefs must land in the
+  right bucket and be annotated with the matching comment here.
 - **The outline's geometry is chrome-side and must be re-measured.** The outline
   is a fixed-position element in the chrome document, moved onto the browser's
   `getBoundingClientRect()`. It is re-measured on tab switch, on window resize
@@ -161,7 +161,10 @@ These are load-bearing. Violating them is how this project regressed before
   `zen-page-tint-ambient` (gradient edges present), `zen-page-tint-active`
   (mod loaded — smoothing is scoped to this so the fade survives leaving a tinted
   page), `zen-page-tint-live` (live mode on), `zen-page-tint-outline` (the drawn
-  boundary is on — this also decides the page's own corner shape).
+  boundary is on — this also decides the page's own corner shape). The outline
+  attribute follows `zen.page-tint.page-outline` AND a non-zero
+  `page-outline-width`, so both ways of saying "off" put the page's own corners
+  back; while it is off no outline element exists at all.
 - **Version lives in two places** and must move together: `theme.json` `version`
   and the `// @version` header in `tint.uc.js`. Commit history uses
   `Release vX.Y.Z: <summary>`, `fix: ...`, `docs: ...`.
@@ -206,7 +209,10 @@ There is no automated harness. Verify in a real Zen build:
    follows the browser when the window is resized and when the sidebar is
    expanded/collapsed; it disappears on an `about:` page and on a
    per-site-disabled host; a monochrome-logo site falls back to the neutral
-   line; `zen.page-tint.page-outline-width = 0` turns it off entirely.
+   line; `zen.page-tint.page-outline = false` turns it off entirely (the page
+   gets its own corners back and the element is torn down), as does
+   `zen.page-tint.page-outline-width = 0`; turning either back on restores it
+   immediately, without a restart.
 
 Performance is the product. When in doubt, measure tab-switch latency under a
 large tab session before and after, and prefer the cheaper path.

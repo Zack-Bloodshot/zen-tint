@@ -32,9 +32,12 @@ path, live-mode polling, the directional gradient, the source switch — go, so
 the mod does exactly one thing: **match the page's declared background**.
 → [ZPT-021](#zpt-021)
 
-**Order:** ZPT-019 is the visible result and is the next thing worked on. It
-is independent of the cleanup, so the two can land in either order. ZPT-021
-is the cleanup that makes the mod one thing.
+**Order:** ZPT-019 (the visible result) is done, and so is ZPT-022 (the outline
+is now a real switch in the settings). Next is ZPT-023 (take the outline's color
+from the page's own visible colors instead of the favicon). ZPT-021 is the
+cleanup that makes the mod one thing; it is not blocked by them, but it and
+ZPT-023 touch the same code (the pixel sampler), so the two have to be
+reconciled rather than landing in any order.
 
 **One thing left open:** the upstream **inset frame** (gap + radius + drop
 shadow — the "page as a floating card" look) is presentation, not matching, so
@@ -77,6 +80,8 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-019](#zpt-019) | done | med | style.css + tint.uc.js | **Page outline: wrap the whole viewport as a squircle, in the site's primary color** (priority 1) |
 | [ZPT-020](#zpt-020) | accepted | med | — | Keep only the page-background matching (merged into ZPT-021) |
 | [ZPT-021](#zpt-021) | open | med | frame.js (bulk) | Keep only the page-background matching — delete everything else the previous repo did |
+| [ZPT-022](#zpt-022) | done | low | tint.uc.js + preferences.json | **Page outline: make it optional — a real toggle in the settings** (priority 2) |
+| [ZPT-023](#zpt-023) | open | med | frame.js + tint.uc.js | **Outline color: use the page's own visible colors instead of the favicon** (priority 3) |
 
 ---
 
@@ -506,6 +511,92 @@ Decisions taken (do not relitigate without reason):
 - **Refs:** ZPT-010, ZPT-011, ZPT-D004, ZPT-D005, [ZPT-020](#zpt-020)
   (merged in), and the archived ZPT-004 / ZPT-009.
 
+### ZPT-022
+**Page outline: make it optional — a real toggle in the settings**
+- **Status:** done · **Priority:** 2 · **Sev:** low · **Area:** tint.uc.js + preferences.json (+ style.css)
+- **Symptom:** the outline is drawn by default (2px) and the only way to turn
+  it off is to know that `zen.page-tint.page-outline-width = 0` means "off".
+  The Sine panel exposes the width as a number, which is a knob, not a switch.
+- **Why:** a drawn frame around the content is the most opinionated thing this
+  mod does. Some people want the tint and nothing else — the page's edge
+  should not be a decision they have to make by remembering a magic number.
+- **Goal:** one click in the settings panel turns the boundary off (and back
+  on), without touching `about:config`.
+- **Options:**
+  - **A checkbox** ("Draw a page outline") next to the width entry, backed by
+    a bool pref (`zen.page-tint.page-outline`, default true), with the width
+    staying the thickness knob. Two prefs for one feature, but each asks one
+    understandable question: *on/off* and *how thick*.
+  - **One pref only** — keep `page-outline-width` and let `0` mean off, but
+    present it as a switch in the panel that writes 0. Sine preferences map
+    1:1 to prefs, so this is a UI-only change; the cost is a dropdown
+    ("on / off") or a checkbox that writes a number.
+  - **Default it off** and make it an opt-in feature. Cheapest to defend
+    ("nothing new unless you ask for it"), but the outline is the whole point
+    of [ZPT-019](#zpt-019) and the user asked for it.
+- **Also to decide:** the outline currently forces the page's own corner radius
+  to `0` (see [ZPT-019](#zpt-019)), so turning it off has to put the page's
+  corners back. That part is already attribute-gated
+  (`zen-page-tint-outline`), so it follows the toggle for free — as long as
+  the toggle drives the same attribute.
+- **Cost:** small. One bool pref, one checkbox in `preferences.json`, one case
+  in the `zen.page-tint.` pref observer (set/remove the attribute, re-measure
+  the outline).
+- **Depends on:** nothing — this is plumbing over the existing implementation.
+- **Decision:** the **checkbox** option. `zen.page-tint.page-outline` (bool,
+  default true) is the switch; `page-outline-width` stays the thickness knob.
+  Each pref answers one question, and neither has to encode the other. A width
+  of `0` still means off, so an existing `about:config` setup keeps working.
+- **Done in:** ZPT-D009.
+- **Refs:** [ZPT-019](#zpt-019) (the implementation this makes optional),
+  `preferences.json`, the `zen.page-tint.` pref observer, the
+  `zen-page-tint-outline` attribute contract in `AGENTS.md`.
+
+### ZPT-023
+**Outline color: use the page's own visible colors instead of the favicon**
+- **Status:** open · **Priority:** 3 · **Sev:** med · **Area:** frame.js (sampling) + tint.uc.js (plumbing)
+- **Symptom:** the outline's color comes from the site's favicon, and in
+  practice that is often the wrong answer: a monochrome logo gives no color at
+  all (the neutral fallback), a multi-brand host gives another brand's color,
+  a favicon that was cached from a previous page can be stale, and a logo's
+  color is not necessarily a color the page is painted in. The line is drawn
+  ON the page, so the color that reads best is one the page actually
+  contains.
+- **Goal:** collect the page's **visible colors** and pick the one that works
+  as the outline — a color that appears on the page (so the line belongs to
+  it), is not the page's own background (or it vanishes into it), and is
+  visible against it.
+- **Options / sketch:**
+  - **Read the pixels and pick a dominant *chromatic* color** rather than a
+    flat average: the old `content` source's grid sampler already reduces the
+    viewport to a 16×16 grid; instead of averaging it, cluster the cells and
+    take the most common saturated cluster, ignoring greys and the page's own
+    background color.
+  - **Use the favicon as a hint, not as the answer:** if the page contains a
+    color close to the brand color, use the page's version of it (brand-
+    accurate AND page-accurate); fall back to the brand color when the page
+    has nothing close.
+  - **Keep the chain as the fallback:** page colors → favicon color → the
+    tint's foreground → nothing.
+- **Cost:** the pixels live in the content process, so this brings the
+  content side back for the outline — one more field in the theme message and
+  one more IPC on a cache miss. It also changes the shape of the per-URL
+  theme cache (`{ bg, edges }` would carry the outline color too), so the
+  cache-invalidation rules in `AGENTS.md` apply: anything that changes what a
+  sample yields has to clear the cache.
+- **Conflict to settle with [ZPT-021](#zpt-021):** that ticket deletes the
+  pixel sampler as part of "one behaviour". This ticket wants a narrow slice
+  of it back — for the OUTLINE, not for the tint. They have to be reconciled
+  explicitly (keep a small sampler for the outline only, or let this ticket
+  land after ZPT-021 and re-add what it needs), rather than one silently
+  undoing the other.
+- **Depends on:** [ZPT-022](#zpt-022) — make the outline optional first, so a
+  bad color cannot hurt anyone while the source is being reworked.
+- **Refs:** [ZPT-019](#zpt-019) (the favicon implementation this replaces),
+  [ZPT-021](#zpt-021) (the cleanup that deletes the pixel path), the
+  `content` source's grid sampler in `frame.js`, the cache rules in
+  `AGENTS.md`.
+
 ---
 
 ## Done log
@@ -514,6 +605,24 @@ Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
 _(The tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D009
+**Page outline is optional: a real on/off switch** — `done`
+- `zen.page-tint.page-outline` (bool, default `true`) is the switch, exposed as
+  a checkbox in the Sine panel right above the thickness entry;
+  `zen.page-tint.page-outline-width` is now just *how thick* (`0` still means
+  off, so existing `about:config` setups keep working).
+- One predicate (`OUTLINE_ENABLED && OUTLINE_WIDTH > 0`) drives the
+  `zen-page-tint-outline` attribute, the `--zpt-page-outline-width` variable
+  (written as `0px` when off) and the element's lifecycle — so the toggle also
+  puts the page's own corner radius back for free.
+- Off is a real off: the outline element, its `ResizeObserver`, the site-color
+  variable and any in-flight favicon lookup are torn down, and the per-tab-switch
+  path early-returns instead of rebuilding them. On re-creates and re-measures
+  the outline for the page that is showing **without a restart**.
+- `removeOutlineElement()` now bumps the color token, so a lookup that resolves
+  after teardown can't resurrect a stale site color.
+- Version `1.2.0` → `1.3.0` in `theme.json` **and** the `// @version` header.
 
 ### ZPT-D008
 **Page outline: the whole viewport, in the site's own color** — `done`

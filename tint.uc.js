@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Zen Tint
 // @description    Zen chrome that continues the page's background color
-// @version        1.2.0
+// @version        1.3.0
 // ==/UserScript==
 
 (() => {
@@ -112,6 +112,12 @@
   //     Non-compact only: compact mode stays flush so Zen's screen-edge hover
   //     targets remain reachable.
   //   zen.page-tint.frame-radius (int px, default 14)  → --zpt-frame-radius
+  //   zen.page-tint.page-outline (bool, default true)
+  //     Whether the drawn boundary is drawn at all. A drawn frame is the most
+  //     opinionated thing the mod does, so it gets a real switch: the Sine panel
+  //     shows a checkbox, not a number the user has to know means "off". While
+  //     it is off the outline element is not even built — no DOM node, no
+  //     ResizeObserver, no favicon lookup, no site color variable.
   //   zen.page-tint.page-outline-width (int px, default 2) → --zpt-page-outline-width
   //     The drawn boundary. A squircle stroke around the WHOLE page viewport —
   //     all four sides, continuously — in the site's own primary color, taken
@@ -119,7 +125,8 @@
   //     was drawn OUTSET in the frame gap: the gap only exists on three sides
   //     (the sidebar occupies the fourth), so the line vanished on exactly the
   //     edge it was wanted on, and a flat 1px rule cannot read as a shape.
-  //     0 = off (the page goes back to its own corners and no line is drawn).
+  //     Thickness only: 0 still means "off", but it is now the coarse knob next
+  //     to the switch rather than the only way to say off.
   //   zen.page-tint.saturation   (int 0..200, default 100)
   //     Scales the sampled color's HSL saturation before it's applied. 0 =
   //     grayscale chrome, 100 = the page's own saturation, 200 = double (more
@@ -158,7 +165,12 @@
   let BRIGHTNESS = clampInt(prefInt('zen.page-tint.brightness', 100), 0, 300);
   let CONTRAST = clampInt(prefInt('zen.page-tint.contrast', 100), 0, 300);
   let AMBIENT_SPREAD = clampInt(prefInt('zen.page-tint.ambient-spread', 0), 0, 100);
+  let OUTLINE_ENABLED = prefBool('zen.page-tint.page-outline', true);
   let OUTLINE_WIDTH = clampInt(prefInt('zen.page-tint.page-outline-width', 2), 0, 8);
+  // Two ways to say "off": the switch, and a width of 0. Both have to hold for
+  // the outline to draw, so every consumer asks this one question instead of
+  // re-deriving the pair (and drifting apart on one of the two).
+  const outlineOn = () => OUTLINE_ENABLED && OUTLINE_WIDTH > 0;
   // Ceiling on the gradient overlay's alpha. Full opacity would let an edge color
   // completely replace the base tint at the extremes, which breaks the readable-
   // foreground pick (that's computed against the base). Capping keeps the endpoints
@@ -329,8 +341,9 @@
     root.style.setProperty('--zpt-frame-gap', `${Math.max(0, prefInt('zen.page-tint.frame-gap', 5))}px`);
     root.style.setProperty('--zpt-frame-radius', `${Math.max(0, prefInt('zen.page-tint.frame-radius', 14))}px`);
     // The outline's COLOR is derived in CSS (site color, else the tint's own
-    // foreground), so only the width needs to come from here.
-    root.style.setProperty('--zpt-page-outline-width', `${OUTLINE_WIDTH}px`);
+    // foreground), so only the width needs to come from here. Off = 0px, so the
+    // stroke collapses even if something later forgets the attribute gate.
+    root.style.setProperty('--zpt-page-outline-width', `${outlineOn() ? OUTLINE_WIDTH : 0}px`);
   }
 
   // ---- The drawn boundary (page outline) ----
@@ -364,8 +377,11 @@
 
   function applyOutlineState() {
     // The outline's on/off state also decides the page's own corner shape, so
-    // it needs an attribute and not just a variable.
-    if (OUTLINE_WIDTH > 0) root.setAttribute('zen-page-tint-outline', 'on');
+    // it needs an attribute and not just a variable. It follows the same
+    // outlineOn() answer as the width, which is what makes the toggle put the
+    // page's own corners back for free: no outline attribute, no forced radius
+    // 0 in style.css.
+    if (outlineOn()) root.setAttribute('zen-page-tint-outline', 'on');
     else root.removeAttribute('zen-page-tint-outline');
   }
 
@@ -692,6 +708,14 @@
   // background) gets no outline either. The attribute gate is in CSS; this
   // only moves and colors it.
   function updateOutlineFor(browser) {
+    // Switched off (or width 0): there is nothing to move, color or observe,
+    // and rebuilding the element on every tab switch would quietly undo the
+    // toggle. Tear down anything left over and stop here — this is the guard
+    // that makes "off" mean off for the whole per-switch path.
+    if (!outlineOn()) {
+      if (outlineElement || observedBrowser) removeOutlineElement();
+      return;
+    }
     if (!browser) return;
     showOutline(true);
     updateOutlineGeometry(browser);
@@ -708,6 +732,9 @@
   }
 
   function removeOutlineElement() {
+    // Invalidate any icon lookup still in flight: it must not resurrect
+    // --zpt-page-site-color after the element (and the feature) is gone.
+    outlineColorToken++;
     try { outlineResizeObserver.disconnect(); } catch {}
     try { if (observedBrowser) outlineResizeObserver.unobserve(observedBrowser); } catch {}
     observedBrowser = null;
@@ -1101,7 +1128,7 @@
   window.addEventListener('resize', onWindowResize);
 
   // Live-apply the appearance prefs (mix / saturation / lightness / gap / radius /
-  // disable-hosts) when they're changed from the Sine settings panel, so the
+  // outline / disable-hosts) when they're changed from the Sine settings panel, so the
   // effect is visible without a restart. (The live-mode prefs are read once at
   // frame-script load and still need a restart — Sine shows a restart toast for
   // those.) A branch observer catches every zen.page-tint.* change; we act only on
@@ -1163,14 +1190,27 @@
         case 'zen.page-tint.frame-radius':
           applyCssVarPrefs();
           break;
+        case 'zen.page-tint.page-outline':
+          OUTLINE_ENABLED = prefBool('zen.page-tint.page-outline', true);
+          applyCssVarPrefs();
+          applyOutlineState();
+          // The switch is expected to be instant, so the page on screen is
+          // handled here rather than on the next tab switch. On: rebuild (or
+          // re-measure) the element and its color. Off: tear the whole thing
+          // down — element, ResizeObserver, site color, in-flight lookup.
+          if (outlineOn()) updateOutlineFor(gBrowser.selectedBrowser);
+          else removeOutlineElement();
+          break;
         case 'zen.page-tint.page-outline-width':
           OUTLINE_WIDTH = clampInt(prefInt('zen.page-tint.page-outline-width', 2), 0, 8);
           applyCssVarPrefs();
           applyOutlineState();
           // The stroke width is half of the box inset, so the outline's box
           // has to be recomputed — and the page's own corner shape flips with
-          // the attribute.
-          updateOutlineGeometry(gBrowser.selectedBrowser);
+          // the attribute. Width 0 is "off" too, so it takes the same
+          // teardown path as the switch instead of re-creating the element.
+          if (outlineOn()) updateOutlineGeometry(gBrowser.selectedBrowser);
+          else removeOutlineElement();
           break;
         // Color-source changes invalidate every cached sample, since the cache
         // stores the resulting color rather than the pixels it came from. Clear
