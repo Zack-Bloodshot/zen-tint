@@ -5,9 +5,14 @@ Guidance for agents working in this repository.
 ## What this is
 
 **Zen Tint** is a [Zen Browser](https://zen-browser.app/) theme/mod,
-distributed through the **Sine** mod loader. It samples the active page's
+distributed through the **Sine** mod loader. It reads the active page's
 background color and tints Zen's chrome (URL bar, sidebar, titlebar, splitter,
 window rim) to match it, so the browser frame looks continuous with the content.
+
+The color comes from one of two sources, chosen by `zen.page-tint.color-source`:
+the page's **declared** background (`page-background`, the default — the color
+the page itself says it sits on) or the **painted pixels** (`content` — what is
+actually on screen, video-aware). See "Sample chain in `frame.js`" below.
 
 There is **no build step, no package manager, no test suite, and no linter**. The
 repo is the shipped artifact: Sine reads `theme.json`, injects `tint.uc.js` into
@@ -60,6 +65,14 @@ from `elementFromPoint`. Per the README's contributing rule: **if you add a
 step, add a one-liner explaining the case it catches that the existing steps
 miss.**
 
+**Second source (`zen.page-tint.color-source = page-background`, the default)** —
+*replaces* that chain rather than extending it: `body` computed background →
+`html` computed background → null, which clears the tint back to Zen's theme.
+No `drawWindow`, no `<meta name="theme-color">`, no DOM walk, and never any edge
+colors — it answers "what does the page declare?" rather than "what is
+painted?", and the two questions have different right answers. A single declared
+color has no spatial content, so `ambient-spread` is inert under this source.
+
 ## Hard invariants — read before editing
 
 These are load-bearing. Violating them is how this project regressed before
@@ -92,9 +105,18 @@ These are load-bearing. Violating them is how this project regressed before
   `prefBool` / `prefInt` / `prefStr` helpers, each with its own `try`.
 - **Restart vs live prefs.** The live-mode group is read **once** at chrome-script
   load and needs a restart (Sine shows the restart toast via `"restart": true` in
-  `preferences.json`). The CSS-variable and color-source prefs are applied live
-  through the `zen.page-tint.` prefix observer. New prefs must land in the right
-  bucket and be annotated with the matching comment here.
+  `preferences.json`). The CSS-variable prefs and `zen.page-tint.color-source`
+  are applied live through the `zen.page-tint.` prefix observer. New prefs must
+  land in the right bucket and be annotated with the matching comment here.
+- **A config change that alters what a sample yields must re-sample in the
+  frame.** The color source lives in the content process, so the chrome side
+  can't force a re-sample under new rules — it can only push the new config and
+  clear its cache. `singleton.applyConfig()` compares a signature of the
+  result-affecting config fields (`colorSource`, `ytAmbient`, `lightAverage`,
+  `edges`) and re-samples when it changes. Without it the new rules only take
+  effect on the next mutation / poll tick / tab switch, and on a static page
+  with no video none of those may ever happen — the chrome would keep showing
+  the old source's color indefinitely.
 - **Editing the sample chain may invalidate the cache's shape.** The cache stores
   the *result*, not the pixels. Anything that changes what a sample yields (e.g.
   `ambient-spread` crossing 0, which flips whether edges are computed at all)
@@ -166,7 +188,7 @@ is picked up once, then updated from Git **at startup** (or when the user clicks
    install or update.
 2. Push with the default branch named **`main`** (Sine assumes `main`; a
    `/tree/<branch>` install URL is the only way to use another name).
-3. Install from `https://github.com/caezium/zen-tint` in Sine. Sine writes the
+3. Install from `https://github.com/Zack-Bloodshot/zen-tint` in Sine. Sine writes the
    entry to `mods.json` with `homepage`, `updatedAt`, `enabled: true`,
    `no-updates: false`, and **no `origin`**.
 
@@ -193,6 +215,16 @@ That is enough. On the next Sine startup (or manual update check) it:
 - Keep `theme.json`'s `id` as `zen-tint`, `homepage` pointed at the repo,
   `no-updates: false`, and `enabled: true`. A malformed `theme.json` makes the
   check silently find nothing.
+- **`theme.json`'s `homepage` must point at THIS repo.** Sine does not overwrite
+  it with the URL you installed from — `createThemeJSON()` only fills in
+  `homepage` when `theme.json` has none (`setProperty` skips existing keys).
+  A `homepage` left pointing at the upstream project makes the startup
+  auto-check fetch the upstream `theme.json`, see a newer timestamp, and replace
+  the installed folder with the upstream's code — silently, with no error.
+- The mod `id` and the frame-script mount path must move together: the frame
+  script is loaded from `chrome://sine/content/<id>/frame.js`, and `id` is the
+  folder name Sine unpacks the repo into. Renaming one without the other leaves
+  the frame script pointing at a path that doesn't exist.
 - **Do not add `updatedAt` back to `theme.json`.** With it present, only changes
   to that field trigger updates; without it, any push (even a README edit) bumps
   the repo timestamp and counts.

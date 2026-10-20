@@ -53,7 +53,7 @@
     "type": "string",
     "value": "number",
     "property": "zen.page-tint.ambient-spread",
-    "label": "Ambient spread (0–100): directional gradient strength. The chrome takes color from the matching side of the page instead of one flat average — left of the URL bar from the left of the page, top of the sidebar from the top. 0 = off (flat tint).",
+    "label": "Ambient spread (0–100): directional gradient strength. The chrome takes color from the matching side of the page instead of one flat average — left of the URL bar from the left of the page, top of the sidebar from the top. 0 = off (flat tint). Only applies to the \"visible color\" source.",
     "defaultValue": 0,
     "placeholder": "0"
   },
@@ -103,15 +103,31 @@
     "margin": "16px 0 8px 0"
   },
   {
+    "type": "dropdown",
+    "property": "zen.page-tint.color-source",
+    "label": "Where the tint color comes from. \"The page's background\" reads the color the page itself declares, so the browser frame continues the page instead of sampling its content. \"The visible color\" samples what is actually painted — video-aware, and correct on apps that lie about their background.",
+    "defaultValue": "page-background",
+    "options": [
+      {
+        "label": "The page's background — flat, blends in",
+        "value": "page-background"
+      },
+      {
+        "label": "The visible color — video-aware, follows content",
+        "value": "content"
+      }
+    ]
+  },
+  {
     "type": "checkbox",
     "property": "zen.page-tint.youtube-ambient",
-    "label": "On YouTube, sample the player's own ambient mode (\"cinematic lighting\") canvas. Matches the glow YouTube draws on screen and skips letterbox bars. Needs Ambient mode enabled in the player; falls back automatically when it isn't.",
+    "label": "On YouTube, sample the player's own ambient mode (\"cinematic lighting\") canvas. Matches the glow YouTube draws on screen and skips letterbox bars. Needs Ambient mode enabled in the player; falls back automatically when it isn't. Only applies to the \"visible color\" source.",
     "defaultValue": true
   },
   {
     "type": "checkbox",
     "property": "zen.page-tint.light-average",
-    "label": "Average pages as light rather than flat color (brighter, more saturated on mixed pages — a mostly-dark page with bright content stops reading as dark). The YouTube ambient source always uses this model.",
+    "label": "Average pages as light rather than flat color (brighter, more saturated on mixed pages — a mostly-dark page with bright content stops reading as dark). The YouTube ambient source always uses this model. Only applies to the \"visible color\" source.",
     "defaultValue": false
   },
 

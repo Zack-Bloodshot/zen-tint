@@ -20,16 +20,16 @@ Today the sampler prefers the *painted pixels* (`drawWindow` of the central 60%)
 over the page's *declared* background. That is what makes the frame follow a
 video and rescue dark apps that lie about their background — but it also means
 the chrome is tinted by "whatever the visible content averages to", not by the
-page's own background. This work adds a second, opt-in source that tinters the
-chrome with the **page's declared background color** so the frame reads as a
-continuation of the page.
+page's own background. This work adds a second source that tints the chrome with
+the **page's declared background color** so the frame reads as a continuation of
+the page — and makes it the default.
 
 Decisions taken (do not relitigate without reason):
 
 | Decision | Choice | Consequence |
 |---|---|---|
 | Which surfaces | **All chrome surfaces** | No `style.css` change — the source feeds the one tint variable every surface already consumes. |
-| Default | **`content` (opt-in)** | No existing look changes; the Sine listing stays accurate. |
+| Default | **`page-background`** | The frame follows the page's declared background out of the box; the pixel sampler stays one click away in the panel. |
 | Transparent `body`/`html` | **Clear the tint → Zen theme** | Predictable, but see [ZPT-014](#zpt-014) (wrapper backgrounds get no tint). |
 | Pref lifecycle | **Live (no restart)** | Same treatment as `youtube-ambient` / `light-average`: clear cache + force resample. |
 
@@ -47,9 +47,9 @@ Decisions taken (do not relitigate without reason):
 
 | ID | Status | Sev | Area | Title |
 |---|---|---|---|---|
-| [ZPT-010](#zpt-010) | open | med | tint.uc.js | `color-source` pref (`content` \| `page-background`) + config plumbing |
-| [ZPT-011](#zpt-011) | open | med | frame.js | `readDeclaredBackground()`: body → html → clear |
-| [ZPT-012](#zpt-012) | open | low | manifest / docs | Dropdown entry, README + AGENTS updates, version bump |
+| [ZPT-010](#zpt-010) | done | med | tint.uc.js | `color-source` pref (`content` \| `page-background`) + config plumbing |
+| [ZPT-011](#zpt-011) | done | med | frame.js | `readDeclaredBackground()`: body → html → clear |
+| [ZPT-012](#zpt-012) | done | low | manifest / docs | Dropdown entry, README + AGENTS updates, version bump |
 | [ZPT-013](#zpt-013) | open | med | — | Verification checklist for the page-background source |
 | [ZPT-014](#zpt-014) | accepted | low | frame.js | Sites whose background is on a wrapper get no tint |
 
@@ -59,15 +59,15 @@ Decisions taken (do not relitigate without reason):
 
 ### ZPT-010
 **`color-source` pref (`content` | `page-background`) + config plumbing**
-- **Status:** open · **Sev:** med · **Area:** tint.uc.js (prefs, config, observer)
-- **Goal:** add `zen.page-tint.color-source` (string, default `content`; values
-  `content` = today's chain, `page-background` = the new source).
+- **Status:** done · **Sev:** med · **Area:** tint.uc.js (prefs, config, observer)
+- **Goal:** add `zen.page-tint.color-source` (string, default `page-background`;
+  values `page-background` = the declared background, `content` = today's chain).
 - **Why this shape:** the source is a *content-process* decision, so it has to
   travel to `frame.js` in the config message. This is exactly the existing
   `youtube-ambient` / `light-average` pattern — no new mechanism.
 - **Fix sketch:**
   - Read via the `prefStr` helper (own `try` — see the shared-`try` invariant).
-  - Coerce anything that isn't `page-background` back to `content`, so a typo in
+  - Coerce anything that isn't a known value back to the default, so a typo in
     `about:config` can't select a half-implemented mode.
   - Add `colorSource` to the `sendConfig()` payload.
   - Add a `zen.page-tint.color-source` case to the branch observer: re-read,
@@ -82,7 +82,7 @@ Decisions taken (do not relitigate without reason):
 
 ### ZPT-011
 **`readDeclaredBackground()`: body → html → clear**
-- **Status:** open · **Sev:** med · **Area:** frame.js (sampling)
+- **Status:** done · **Sev:** med · **Area:** frame.js (sampling)
 - **Goal:** when `config.colorSource === 'page-background'`, return the page's
   *declared* background instead of the painted average.
 - **Definition (chosen):** `body` computed `background-color` → `html` computed
@@ -102,9 +102,9 @@ Decisions taken (do not relitigate without reason):
     ambient gradient is inert (same as today's `meta` / `body` / `html` paths).
     `zen-page-tint-ambient` is simply never set, so the gradient rules cost
     nothing.
-- **Defaults to update:** add `colorSource: 'content'` to the `singleton.config`
-  default object and copy it in `applyConfig()`, so a dropped config message
-  leaves the old behavior in effect.
+- **Defaults to update:** add `colorSource: 'page-background'` to the
+  `singleton.config` default object and copy it in `applyConfig()`, so a dropped
+  config message leaves the default behavior in effect.
 - **Interaction:** `ambient-spread` has no visible effect under this source —
   mention in the pref label / README ([ZPT-012](#zpt-012)), don't silently drop
   the pref.
@@ -114,17 +114,19 @@ Decisions taken (do not relitigate without reason):
 
 ### ZPT-012
 **Dropdown entry, README + AGENTS updates, version bump**
-- **Status:** open · **Sev:** low · **Area:** manifest / docs
+- **Status:** done · **Sev:** low · **Area:** manifest / docs
 - **Items:**
   - `preferences.json`: a `"type": "dropdown"` in the "Color source — applies
-    live" section — `content` ("Follow the page's visible color — video-aware")
-    vs `page-background` ("Use the page's own background — flat, blends in").
-    Confirmed supported by Zen's preferences schema (`options: [{label, value}]`).
-  - `README.md`: add the pref to the live-applies table; note that
-    `page-background` disables YouTube ambient mode, video-following, and
-    `meta theme-color` preference, and that `ambient-spread` does nothing under
-    it. Add the wrapper-background limitation ([ZPT-014](#zpt-014)) to
-    Known limitations.
+    live" section — `page-background` ("The page's background — flat, blends
+    in", the default) vs `content` ("The visible color — video-aware, follows
+    content"). Confirmed supported by Zen's preferences schema (`options:
+    [{label, value}]`).
+  - `README.md`: add the pref to the live-applies table; lead with the
+    page-background source as the idea and keep the pixel sampler as the opt-in
+    alternative; note that `page-background` disables YouTube ambient mode,
+    video-following, and `meta theme-color` preference, and that `ambient-spread`
+    does nothing under it. Add the wrapper-background limitation
+    ([ZPT-014](#zpt-014)) to Known limitations.
   - `AGENTS.md`: extend the "Sample chain" description with the second source,
     and put `color-source` in the live-applicable bucket under "Restart vs live
     prefs".
@@ -157,19 +159,20 @@ Decisions taken (do not relitigate without reason):
 
 ### ZPT-014
 **Sites whose background is on a wrapper get no tint**
-- **Status:** accepted · **Sev:** low · **Area:** frame.js (`header` source)
+- **Status:** accepted · **Sev:** low · **Area:** frame.js (`html` source)
 - **Symptom:** with `color-source = page-background`, a page that sets its color
   on a wrapper `<div>` rather than on `body`/`html` resolves to `null`, so the
   chrome shows Zen's theme instead of the page color — the opposite of "blend
   in". Common in SPAs.
 - **Why:** the fallback was deliberately chosen as "clear to Zen theme"
   (interview decision) rather than walking the DOM to the nearest solid
-  ancestor.
+  ancestor. This is now the **default** path, so it is the limitation most
+  users will meet first — it is documented in the README's Known limitations.
 - **Options:** the existing step-5 walk (nearest solid bg behind screen-center)
   would cover most of these. It is a one-line addition, but it re-introduces the
   "which element counts" ambiguity this source was meant to remove.
 - **Revisit when:** it's reported more than once, or a major site is affected.
-- **Workaround:** leave `color-source` at `content` (default) for those sites, or
+- **Workaround:** set `color-source` back to `content` for those sites, or
   add the host to `disable-hosts`.
 - **Refs:** the interview decision recorded in [Current focus](#current-focus-page-background-tint-source).
 
@@ -181,6 +184,33 @@ Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
 _(nothing yet — this tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D006
+**Dropdown entry, README + AGENTS updates, version bump** — `done`
+- `preferences.json`: dropdown in the live "Color source" section, default
+  `page-background`.
+- `README.md` rewritten around the declared-background idea; the pixel sampler
+  is documented as the opt-in alternative.
+- `AGENTS.md`: second source described; new invariant for config changes.
+- Version `2.0.0` → `1.0.0` in `theme.json` **and** the `// @version` header.
+
+### ZPT-D005
+**`readDeclaredBackground()`: body → html → clear** — `done`
+- New sampler in `frame.js`, short-circuiting the pixel chain entirely under
+  the `page-background` source.
+- `source` strings `page-bg:body` / `page-bg:html` / `page-bg:none`.
+- `edges: null` — no gradient under this source.
+- **Beyond the original sketch:** a config change that alters what a sample
+  yields now re-samples in the frame. Without it the new source only took
+  effect on the next mutation / poll tick / tab switch — on a static page with
+  no video, none of those may ever happen.
+
+### ZPT-D004
+**`color-source` pref + config plumbing** — `done`
+- `zen.page-tint.color-source`, default `page-background`, unknown values
+  coerced back to the default.
+- Pushed to the frame script in the config message; live-applied through the
+  `zen.page-tint.` pref observer (clear cache + force resample).
 
 ---
 

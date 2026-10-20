@@ -193,6 +193,11 @@
       config: {
         liveRateMs: 0, alwaysOn: false, threshold: 0, debug: false,
         ytAmbient: true, lightAverage: false,
+        // Which color to sample. 'page-background' = the page's own declared
+        // background (body → html → clear); 'content' = the painted-pixel chain.
+        // Defaults to page-background so a dropped config message leaves the
+        // DEFAULT behavior in effect rather than the older one.
+        colorSource: 'page-background',
         // Compute per-edge colors? Off unless the chrome side has a non-zero
         // ambient spread, so the regional accumulate is skipped when unused.
         edges: false,
@@ -214,12 +219,22 @@
         if (this.config.debug) {
           try {
             console.log('[zen-tint frame] instance started | ytAmbient =', this.config.ytAmbient,
-              '| lightAverage =', this.config.lightAverage, '| liveRateMs =', this.config.liveRateMs);
+              '| lightAverage =', this.config.lightAverage,
+              '| colorSource =', this.config.colorSource,
+              '| liveRateMs =', this.config.liveRateMs);
           } catch {}
         }
       },
 
+      // The subset of the config that changes WHAT a sample yields, as opposed to
+      // how often we poll. If one of these changes, the color already on screen
+      // was produced by different rules, so it has to be redone.
+      sampleSignature(cfg) {
+        return `${cfg.colorSource}|${cfg.ytAmbient}|${cfg.lightAverage}|${cfg.edges}`;
+      },
+
       applyConfig(data) {
+        const before = this.sampleSignature(this.config);
         this.config = {
           liveRateMs: data && data.liveRateMs > 0 ? data.liveRateMs : 0,
           alwaysOn: !!(data && data.alwaysOn),
@@ -227,9 +242,25 @@
           debug: !!(data && data.debug),
           ytAmbient: !!(data && data.ytAmbient),
           lightAverage: !!(data && data.lightAverage),
+          // Only the exact known value is honored; anything else falls back to
+          // the default, so a partial or malformed config message can't select
+          // a mode this script doesn't implement.
+          colorSource: (data && data.colorSource === 'content') ? 'content' : 'page-background',
           edges: !!(data && data.edges),
         };
-        if (this.instance) this.instance.applyConfig();
+        if (this.instance) {
+          this.instance.applyConfig();
+          // Re-sample when the config changed what a sample yields. The chrome
+          // side can't do this for us: the source decision lives in this
+          // process, and the config message only carries the new settings.
+          // Without it the new source would take effect on the next mutation,
+          // poll tick, or tab switch — and on a static page with no video, none
+          // of those may ever happen, so the chrome would keep showing the
+          // color produced by the OLD source indefinitely.
+          if (this.sampleSignature(this.config) !== before) {
+            try { this.instance.sample(true); } catch {}
+          }
+        }
       },
 
       teardown() {
@@ -486,6 +517,37 @@
         return fallback;
       }
 
+      // Read the page's DECLARED background: the color the page itself says it
+      // sits on, independent of what is painted on top of it.
+      //
+      // WHY A SEPARATE SOURCE: the pixel path samples what is VISIBLE, which is
+      // what you want for video and for apps that lie about their background. But
+      // it also means the chrome is tinted by "whatever the content averages to"
+      // rather than by the page's own background — on a site whose content is a
+      // mix of cards, text and imagery, that average isn't the page color at all.
+      // This source answers the other question: what color does the page declare?
+      //
+      // body → html → nothing. A transparent body/html is a legitimate answer
+      // ("this page has no background of its own"), so it resolves to null and
+      // the chrome clears the tint back to Zen's theme rather than inventing a
+      // color. Sites that paint their background on a wrapper element land here
+      // too — a known, accepted limitation.
+      //
+      // No DOM walk, no drawWindow, no <meta name="theme-color">: this path
+      // answers one question only, and every extra source would reintroduce the
+      // "which color is really the page's" ambiguity it exists to remove.
+      function readDeclaredBackground(doc) {
+        if (doc.body) {
+          const c = normalizeColor(content.getComputedStyle(doc.body).backgroundColor);
+          if (c) return { bg: c, source: 'page-bg:body' };
+        }
+        if (doc.documentElement) {
+          const c = normalizeColor(content.getComputedStyle(doc.documentElement).backgroundColor);
+          if (c) return { bg: c, source: 'page-bg:html' };
+        }
+        return { bg: null, source: 'page-bg:none' };
+      }
+
       // Sample chain (first match wins): yt-ambient → pixel → meta → body → html
       // → walk. Every path is normalized so the chrome side only sees rgb(r, g, b).
       //
@@ -495,6 +557,14 @@
       // flat, which is correct: there's no gradient to infer from one color.
       function read() {
         try {
+          // The page-background source is a different question, not another step
+          // in this chain, so it short-circuits the whole thing. Nothing below
+          // (yt-ambient, pixel, meta, body/html, walk) may run under it.
+          if (singleton.config.colorSource === 'page-background') {
+            const declared = readDeclaredBackground(content.document);
+            return { bg: declared.bg, edges: null, source: declared.source };
+          }
+
           const doc = content.document;
           let bg = null;
           let edges = null;
@@ -786,6 +856,9 @@
 
       inst.start = start;
       inst.applyConfig = applyConfig;
+      // Exposed so the persistent singleton can force a re-sample when a config
+      // message changes what a sample yields — see singleton.applyConfig.
+      inst.sample = sample;
       inst.dispose = dispose;
       return inst;
     }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Zen Tint
-// @description    Adaptive Zen chrome color from the active page
-// @version        2.0.0
+// @description    Zen chrome that continues the page's background color
+// @version        1.0.0
 // ==/UserScript==
 
 (() => {
@@ -54,9 +54,9 @@
   const LIVE_HOSTS_RAW = prefStr('zen.page-tint.live-mode-hosts', '');
   const LIVE_THRESHOLD = prefInt('zen.page-tint.live-mode-threshold', 8);
 
-  // Color-source prefs. Both are pushed to the frame script with the rest of the
-  // config, and both are live-applicable (the observer below clears the cache and
-  // re-samples), so they can be A/B'd without a restart.
+  // Color-source prefs. All of them are pushed to the frame script with the rest
+  // of the config, and all of them are live-applicable (the observer below clears
+  // the cache and re-samples), so they can be A/B'd without a restart.
   //
   //   zen.page-tint.youtube-ambient  (bool, default true)
   //     On YouTube, sample the video's own painted picture box instead of a
@@ -76,6 +76,24 @@
   //     uses this model regardless, since there it's modelling actual light.
   let YT_AMBIENT = prefBool('zen.page-tint.youtube-ambient', true);
   let LIGHT_AVERAGE = prefBool('zen.page-tint.light-average', false);
+  //   zen.page-tint.color-source  (string, default 'page-background')
+  //     Which color the chrome follows:
+  //       'page-background' — the page's own DECLARED background (body → html →
+  //                           clear). Flat, and it tracks the page's surface
+  //                           rather than "whatever the content averages to".
+  //                           This is the default: the frame should read as a
+  //                           continuation of the page, not as a sample of it.
+  //       'content'         — the painted pixels. Video-aware, and it rescues
+  //                           apps that lie about their background (Gmail).
+  //                           Opt in when you want the chrome to follow the
+  //                           content instead of the page's surface.
+  //     An unrecognized value falls back to the default, so a typo in
+  //     about:config can't select a half-implemented mode.
+  const PAGE_BACKGROUND = 'page-background';
+  const COLOR_SOURCES = ['content', PAGE_BACKGROUND];
+  const DEFAULT_COLOR_SOURCE = PAGE_BACKGROUND;
+  const normalizeColorSource = (v) => (COLOR_SOURCES.includes(v) ? v : DEFAULT_COLOR_SOURCE);
+  let COLOR_SOURCE = normalizeColorSource(prefStr('zen.page-tint.color-source', DEFAULT_COLOR_SOURCE));
 
   // CSS-side appearance knobs. Unlike the live-mode prefs (read once at
   // frame-script load, so they need a restart), these only drive CSS variables,
@@ -165,6 +183,8 @@
     '| threshold =', LIVE_THRESHOLD,
     '| always-on =', LIVE_ALWAYS_ON,
     '| allowlist =', LIVE_HOSTS.length ? LIVE_HOSTS.join(', ') : '(none)');
+
+  log('color-source =', COLOR_SOURCE);
 
   const MESSAGE_NAME = 'zen-page-tint:theme';
   const CONFIG_MESSAGE_NAME = 'zen-page-tint:config';
@@ -505,8 +525,13 @@
         debug: DEBUG,
         ytAmbient: YT_AMBIENT,
         lightAverage: LIGHT_AVERAGE,
+        // Which color to sample. Decided here, executed in the content process —
+        // the frame script owns the page, so it has to be told.
+        colorSource: COLOR_SOURCE,
         // Only ask for per-edge colors when something will actually render them.
-        edges: AMBIENT_SPREAD > 0,
+        // Under the page-background source there is no grid sample at all, so the
+        // edge colors could never be computed — asking for them would be a lie.
+        edges: AMBIENT_SPREAD > 0 && COLOR_SOURCE !== PAGE_BACKGROUND,
       });
     } catch (e) { log('config message send failed', e); }
   }
@@ -724,8 +749,10 @@
         // therefore reloads the frame script (re-pushing this config with it).
         case 'zen.page-tint.youtube-ambient':
         case 'zen.page-tint.light-average':
+        case 'zen.page-tint.color-source':
           YT_AMBIENT = prefBool('zen.page-tint.youtube-ambient', true);
           LIGHT_AVERAGE = prefBool('zen.page-tint.light-average', false);
+          COLOR_SOURCE = normalizeColorSource(prefStr('zen.page-tint.color-source', DEFAULT_COLOR_SOURCE));
           themeCache.clear();
           scheduleSample(true);
           break;
