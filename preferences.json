@@ -99,14 +99,14 @@
   {
     "type": "checkbox",
     "property": "zen.page-tint.page-outline",
-    "label": "Draw a page outline. A squircle stroke around the whole page viewport, in a color the page itself contains (with the site's favicon as the fallback) — the page's boundary, so the frame reads as continuous AND bounded. Turn it off for the tint and nothing else: the page keeps its own corners and no line is drawn.",
+    "label": "Draw a page outline. A squircle border around the whole page viewport, in a color the page itself contains (with the site's favicon as the fallback) — the page's boundary, so the frame reads as continuous AND bounded. The page is laid out inside the border, so no content is ever painted over; fullscreen and Glance drop it entirely. Turn it off for the tint and nothing else: the page keeps its own corners and no line is drawn.",
     "defaultValue": true
   },
   {
     "type": "string",
     "value": "number",
     "property": "zen.page-tint.page-outline-width",
-    "label": "Page outline width (px): how thick the stroke is. Only applies while the outline above is on.",
+    "label": "Page outline width (px): how thick the border is. A change reflows the page by the new width. Only applies while the outline above is on; 0 also means off.",
     "defaultValue": 2,
     "placeholder": "2"
   },

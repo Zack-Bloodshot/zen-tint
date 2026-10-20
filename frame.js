@@ -464,9 +464,10 @@
 
       // ---- The outline's color, from the page's own visible pixels ----
       //
-      // ZPT-023. The outline is drawn ON the page, so the color that reads best
-      // is one the page actually contains: the line belongs to the page and
-      // cannot disagree with what is on screen. The favicon (the chrome side's
+      // ZPT-023. The outline hangs on the page's edge (a layout border beside
+      // it, not a coating over it), so the color that reads best is one the
+      // page actually contains: the line belongs to the page and cannot
+      // disagree with what is on screen. The favicon (the chrome side's
       // fallback) answers a different question — "what is this site's brand?" —
       // which is often wrong here: a monochrome logo gives nothing, a
       // multi-brand host gives another brand's color, and a logo's color need

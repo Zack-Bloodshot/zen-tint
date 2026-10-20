@@ -13,8 +13,10 @@
   --zpt-frame-gap: 5px;
   --zpt-frame-radius: 14px;
   --zpt-frame-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.10);
-  /* The drawn boundary: a squircle stroke around the whole page viewport, in a
-     color the page itself contains. The width is a pref
+  /* The drawn boundary: a squircle border around the whole page viewport, in a
+     color the page itself contains. It is a REAL layout border on
+     #zen-tabbox-wrapper (the page is laid out inside the stroke — see the
+     outline section further down). The width is a pref
      (zen.page-tint.page-outline-width); the color is derived here, so the
      fallback chain lives in one place:
        page color (--zpt-page-site-color, sampled from the page's own visible
@@ -28,10 +30,11 @@
      drawn boundary is the only shape around the content — see the
      .browserSidebarContainer rule below. */
   --zpt-page-outline-width: 2px;
-  /* Corner radius of the drawn boundary. Deliberately small: the page's own
-     corners are squared while the outline is on, so the outline's squircle
-     corners cut INSIDE the page's square corners — a big radius would leave a
-     visible wedge of page outside the line. */
+  /* Corner radius of the drawn boundary's OUTER edge. The page is clipped to
+     the border's INNER edge (radius minus width), so this sits just inside the
+     chrome's own corners (--zpt-frame-radius 14px − ~2px ≈ 12px): no page
+     wedge pokes outside the line, and the frame's rounded silhouette still
+     reads. */
   --zpt-page-outline-radius: 12px;
   --zpt-page-outline-fallback: color-mix(in srgb, var(--zen-tab-header-foreground, #000) 30%, transparent);
   --zpt-page-outline-color: var(--zpt-page-site-color, var(--zpt-page-outline-fallback));
@@ -204,12 +207,15 @@
       --zen-big-shadow: none;
     }
 
-    /* The drawn outline owns the page's shape while it is on. A page whose own
-       corners are rounded (a circular arc, and only at the bottom) breaks the
-       outline's continuity: the line's squircle corner would cut ACROSS the
-       page's clipped corner instead of tracing it, leaving a colored stroke
-       over the neutral gap. Squaring the page and letting the drawn boundary
-       be the only shape keeps the two from competing. */
+    /* The drawn outline owns the page's shape while it is on: the wrapper's
+       overflow clip (#zen-tabbox-wrapper, border-radius minus border-width)
+       is the only rounding around the content, and it must not have to fight
+       a second, larger radius the page gives itself — a page whose own
+       corners are rounded (a circular arc, and only at the bottom) inside the
+       outline's squircle clip reads as two competing shapes at the same
+       corner. Squaring the page and letting the drawn boundary clip it keeps
+       one shape; turning the outline off restores the default above in the
+       same attribute flip. */
     :root[zen-page-tint-outline="on"] &:not(.zen-glance-overlay) {
       --zen-native-inner-radius: 0;
     }
@@ -527,34 +533,50 @@
  *
  * The tint makes the chrome continuous with the page. Taken too far, that
  * erases where the page ENDS — a sidebar and a page in the same color read as
- * one flat field. So the boundary is DRAWN, deliberately: a squircle stroke
+ * one flat field. So the boundary is DRAWN, deliberately: a squircle border
  * around the whole page viewport, on all four sides, continuously, in a color
  * the page itself contains (--zpt-page-site-color: sampled from the page's own
  * visible pixels by frame.js, with the site's favicon as the fallback when the
  * page has no color of its own).
  *
- * It is a BORDER, and a border is allowed to sit on top of the page's
- * outermost pixels — that is what a border is. The TINT is not allowed to (see
- * the one-tint-layer invariant in AGENTS.md). The two jobs stay separate: the
- * tint lives on chrome surfaces, the outline lives on the page's edge, and
- * neither may be used to do the other's job.
+ * It is a REAL LAYOUT border on #zen-tabbox-wrapper, not an overlay — the
+ * box-model technique Zen Wireframe 2.0 proved for its webview border. A CSS
+ * border consumes layout space: the page is laid out INSIDE the stroke, so it
+ * ends where the line starts and no page pixel is painted over, on any edge,
+ * at any corner. The previous implementation floated a fixed-position stroke
+ * ON the page's outermost pixels; the chrome paints above the content, so the
+ * line cut through content flush to the viewport edge (YouTube's bottom
+ * thumbnail row, duration badges) — ZPT-024 replaced it. Because the geometry
+ * is now plain CSS layout, the chrome script owns none of it: no element, no
+ * rect reads, no ResizeObserver, no re-measure on tab switch / window resize /
+ * sidebar transitions. It only feeds the color variable and the on/off
+ * attribute.
  *
- * The element itself is created and positioned by tint.uc.js — it has to
- * track the browser's rect, and only the chrome side knows it — so this block
- * only styles it. It lives in the document body, NOT inside the browser's
- * container, so nothing clips it to the page's own shape, and it is
- * position:fixed with viewport coordinates (which is exactly what
- * getBoundingClientRect reports).
+ * The TINT is still bounded the other way: it only ever paints chrome
+ * surfaces, never the page (see the one-tint-layer invariant in AGENTS.md).
+ * The two jobs stay separate.
+ *
+ * The layout cost of a real border is accepted: toggling the outline or
+ * changing its width reflows the page by the stroke width (2px, and both are
+ * rare). No transparent border is reserved while off — that would permanently
+ * inset every page by the stroke width for nothing.
  */
-#zpt-page-outline {
-  position: fixed;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
+:root[zen-page-tint="on"][zen-page-tint-outline="on"] #zen-tabbox-wrapper {
+  /* Consume the wrapper's EXISTING outer box: the stroke eats into it
+     (border-box) instead of pushing it beyond #zen-appcontent-wrapper's clip,
+     which would shave the bottom border off. */
   box-sizing: border-box;
-  border: var(--zpt-page-outline-width, 2px) solid var(--zpt-page-outline-color, transparent);
-  border-radius: var(--zpt-page-outline-radius, 12px);
+  /* Clip the page to the border's inner rounded edge. Overflow clips to the
+     PADDING box, whose corners round to border-radius minus border-width, so
+     the page and the line share one corner shape and no page wedge pokes
+     outside the stroke. The clip lives HERE, at wrapper level, because
+     Wireframe's commit history says wrapper-level clipping was fine and
+     tabpanel-level clipping broke browser popups. */
+  overflow: hidden;
+  border-style: solid !important;
+  border-color: var(--zpt-page-outline-color, transparent) !important;
+  border-width: var(--zpt-page-outline-width, 2px) !important;
+  border-radius: var(--zpt-page-outline-radius, 12px) !important;
   /* A true squircle: CSS border-radius only ever makes circular arcs, which
      read as a different shape next to a superellipse. Firefox's corner-shape
      does it properly — superellipse() is the newer spelling, squircle() the
@@ -562,20 +584,39 @@
      without either. */
   corner-shape: squircle;
   corner-shape: superellipse(4);
-  pointer-events: none;
-  /* The same stacking level as the content wrapper (#zen-appcontent-wrapper is
-     z-index 3), and later in tree order, so the outline paints exactly where
-     the page content paints — above it, but UNDER the chrome that floats over
-     the page (the Zen library, a panel, the sidebar when it overlaps). */
-  z-index: 3;
-  display: none;
 }
 
-/* The outline belongs to the tinted page: an untinted page (about:, a
-   per-site-disabled host, a page with no declared background) keeps Zen's own
-   chrome and gets no boundary either. */
-:root[zen-page-tint="on"][zen-page-tint-outline="on"] #zpt-page-outline {
-  display: block;
+/* The page stack fills the border's CONTENT box (which begins after the
+   stroke); zeroing its own margin/padding keeps that true instead of letting
+   leftover spacing double-inset the page beyond the line. Gated like the
+   border, so the outline-off layout is untouched. */
+:root[zen-page-tint="on"][zen-page-tint-outline="on"] :is(#tabbrowser-tabbox, #tabbrowser-tabpanels) {
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Fullscreen is not a boundary state. DOM fullscreen (a fullscreen <video> or
+   <element>) and whole-window fullscreen both own the entire viewport, and a
+   colored stroke across the picture would be plainly wrong — so the border
+   and its clipping are REMOVED here, not merely recolored. Both ways out of
+   fullscreen simply stop matching these rules, and the outline returns with
+   no JS bookkeeping and no stale line left over the page. */
+:root[inDOMFullscreen="true"] #zen-tabbox-wrapper,
+:root[sizemode="fullscreen"] #zen-tabbox-wrapper {
+  border-width: 0 !important;
+  overflow: visible !important;
+  border-radius: 0 !important;
+}
+
+/* A Zen Glance overlays its parent page (the parent stays visible, dimmed,
+   behind the child browser), so the parent's boundary would be drawn across
+   the dim. Matched on the overlay container's live class: opening a glance
+   drops the line, expanding (or closing) it restores the outline — no JS
+   bookkeeping. Only the width changes so the (unchanged) corner clip cannot
+   flicker mid-glance. */
+:root[zen-page-tint="on"][zen-page-tint-outline="on"]:has(.browserSidebarContainer.zen-glance-overlay) #zen-tabbox-wrapper {
+  border-width: 0 !important;
 }
 
 /* ---------- Color-change smoothing ----------

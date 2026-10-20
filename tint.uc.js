@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Zen Tint
 // @description    Zen chrome that continues the page's background color
-// @version        1.4.0
+// @version        1.5.0
 // ==/UserScript==
 
 (() => {
@@ -116,10 +116,11 @@
   //     Whether the drawn boundary is drawn at all. A drawn frame is the most
   //     opinionated thing the mod does, so it gets a real switch: the Sine panel
   //     shows a checkbox, not a number the user has to know means "off". While
-  //     it is off the outline element is not even built — no DOM node, no
-  //     ResizeObserver, no pixel read, no favicon lookup, no site color variable.
+  //     it is off the border (and the page clipping that comes with it) is not
+  //     in the CSS at all, and no pixel read, favicon lookup or site color
+  //     variable runs.
   //   zen.page-tint.page-outline-width (int px, default 2) → --zpt-page-outline-width
-  //     The drawn boundary. A squircle stroke around the WHOLE page viewport —
+  //     The drawn boundary. A squircle border around the WHOLE page viewport —
   //     all four sides, continuously — in a color the page contains (sampled
   //     from its own visible pixels by frame.js), with the site's favicon as the
   //     fallback. It replaces the old frame-separator hairline, which
@@ -357,21 +358,28 @@
   // top, right and bottom and vanished on exactly the edge the user asked
   // for. A flat 1px rule cannot read as a shape either.
   //
-  // So the boundary is DRAWN instead of implied: a squircle stroke around the
-  // whole page viewport, on all four sides, continuously, in the site's own
-  // primary color.
+  // The v1.2.0..1.4.0 answer was a floating overlay: a fixed-position element
+  // placed on the browser's rect, painting over the page's outermost pixels.
+  // That traded page content for the line, and on pages with content flush to
+  // the viewport edge the stroke cut through it (ZPT-024).
   //
-  // It is a border, and a border is allowed to sit on top of the page's
-  // outermost pixels — that is what a border IS. The TINT is not allowed to
-  // (see the one-tint-layer invariant in AGENTS.md). The two jobs stay
-  // separate: the tint lives on chrome surfaces, the outline lives on the
-  // page's edge, and neither may be used to do the other's job.
-  const OUTLINE_ELEMENT_ID = 'zpt-page-outline';
+  // Now the boundary is a REAL CSS border on #zen-tabbox-wrapper (style.css) —
+  // the technique Zen Wireframe 2.0 proved: a border is part of the box model,
+  // so the page is LAID OUT inside the stroke instead of painted under it, and
+  // the border's inner rounded edge + overflow hidden give the page and the
+  // line one shared corner shape. The chrome therefore owns none of the
+  // geometry: no outline element, no rect reads, no ResizeObserver, no window
+  // resize or layout tracking — tab switch, window resize, sidebar
+  // expand/collapse and compact mode are CSS layout, not re-measure.
+  //
+  // What the chrome still owns is the state CSS can't derive: the on/off
+  // attribute (applyOutlineState), the width variable, and the border's COLOR,
+  // which travels by IPC from the page (its own pixels, favicon fallback).
+
   // The corner radius of the drawn boundary is a CSS knob
   // (--zpt-page-outline-radius), not a pref: nothing in JS needs it, because
   // the shape is CSS's job (corner-shape: squircle).
 
-  let outlineElement = null;
   // Bumped on every color request; a resolve that comes back stale (the user
   // switched tabs meanwhile) must not paint the previous site's color.
   let outlineColorToken = 0;
@@ -384,62 +392,6 @@
     // 0 in style.css.
     if (outlineOn()) root.setAttribute('zen-page-tint-outline', 'on');
     else root.removeAttribute('zen-page-tint-outline');
-  }
-
-  // The outline is a plain element in the chrome document that we position
-  // over the page viewport. It lives in the document body (NOT inside the
-  // browser's container) so nothing clips it to the page's own rounded shape,
-  // and it is position:fixed with viewport coordinates, which is exactly what
-  // getBoundingClientRect() reports.
-  function ensureOutlineElement() {
-    if (outlineElement?.isConnected) return outlineElement;
-    const host = document.body || document.documentElement;
-    if (!host) return null;
-    const el = document.createElement('div');
-    el.id = OUTLINE_ELEMENT_ID;
-    el.setAttribute('aria-hidden', 'true');
-    // left/top are set explicitly (rather than left to the static position)
-    // so the first measurement can tell where the containing block starts.
-    el.style.left = '0px';
-    el.style.top = '0px';
-    host.appendChild(el);
-    outlineElement = el;
-    return el;
-  }
-
-  // The origin of the outline's containing block, in viewport coordinates. For
-  // a fixed-position element that is the viewport itself — unless an ancestor
-  // has a transform or a filter, which would make THAT ancestor the containing
-  // block. It is measured rather than assumed: the element's own rect says
-  // where it actually landed, so the difference is a constant offset to
-  // subtract. The measurement reuses the layout flush the browser's rect read
-  // already did, so it costs no extra reflow.
-  let outlineOrigin = { x: 0, y: 0 };
-
-  // Move the outline onto the browser's rect. The stroke is centered on the
-  // box edge, so the box is inset by half of it: the whole line lands on the
-  // page's own pixels instead of half of it hanging over the chrome.
-  function updateOutlineGeometry(browser) {
-    const el = ensureOutlineElement();
-    if (!el || !browser) return;
-    let rect;
-    try { rect = browser.getBoundingClientRect(); } catch { return; }
-    if (!rect || rect.width < 16 || rect.height < 16) return;
-
-    // Where did the element actually land? The layout is clean here (the read
-    // above flushed it), so this costs no extra reflow. A hidden element
-    // reports a zero rect, which would be a lie — keep the last known origin.
-    const cur = el.getBoundingClientRect();
-    if (cur.width > 0 || cur.height > 0) {
-      outlineOrigin.x = cur.left - (parseFloat(el.style.left) || 0);
-      outlineOrigin.y = cur.top - (parseFloat(el.style.top) || 0);
-    }
-
-    const inset = OUTLINE_WIDTH / 2;
-    el.style.left = `${rect.left + inset - outlineOrigin.x}px`;
-    el.style.top = `${rect.top + inset - outlineOrigin.y}px`;
-    el.style.width = `${Math.max(0, rect.width - OUTLINE_WIDTH)}px`;
-    el.style.height = `${Math.max(0, rect.height - OUTLINE_WIDTH)}px`;
   }
 
   // ---- The site's primary color, from its favicon — the outline's FALLBACK ----
@@ -708,67 +660,27 @@
     requestOutlineColor(browser);
   }
 
-  // Keep the outline on the browser's rect as the layout moves (sidebar
-  // expand/collapse, window resize, Zen's compact mode). The observer fires on
-  // the browser element's SIZE change, which covers every one of those; the
-  // window resize listener is the belt-and-suspenders for the cases where the
-  // element is re-laid-out without a size change.
-  let observedBrowser = null;
-  const outlineResizeObserver = new ResizeObserver(() => {
-    const browser = gBrowser.selectedBrowser;
-    if (browser) updateOutlineGeometry(browser);
-  });
-  function observeOutlineBrowser(browser) {
-    if (observedBrowser === browser) return;
-    try { if (observedBrowser) outlineResizeObserver.unobserve(observedBrowser); } catch {}
-    observedBrowser = browser;
-    if (browser) { try { outlineResizeObserver.observe(browser); } catch {} }
-  }
-
   // The outline follows the TINTED page: it is part of the same behaviour, so
   // an untinted page (about:, a disabled host, a page with no declared
-  // background) gets no outline either. The attribute gate is in CSS; this
-  // only moves and colors it.
+  // background) gets no outline either. The border itself, its on/off gates
+  // and ALL of its geometry live in CSS (style.css) — this only feeds it the
+  // COLOR.
   //
   // `pageColor` is the color the frame script found in the page's own pixels.
-  // It is the preferred answer (the line is drawn ON the page, so a color the
-  // page contains belongs to it); the favicon is only the fallback when the page
-  // yielded no usable color.
+  // It is the preferred answer (the border sits beside a page, so a color the
+  // page contains belongs to it); the favicon is only the fallback when the
+  // page yielded no usable color.
   function updateOutlineFor(browser, pageColor) {
-    // Switched off (or width 0): there is nothing to move, color or observe,
-    // and rebuilding the element on every tab switch would quietly undo the
-    // toggle. Tear down anything left over and stop here — this is the guard
-    // that makes "off" mean off for the whole per-switch path.
+    // Switched off (or width 0): there is nothing to color, and a stale site
+    // color must not linger as a var() consumer's input. The attribute gate
+    // already removed the border and the page clipping; clearing the color is
+    // what makes "off" mean off for the per-switch path too.
     if (!outlineOn()) {
-      if (outlineElement || observedBrowser) removeOutlineElement();
+      clearOutlineColor();
       return;
     }
     if (!browser) return;
-    showOutline(true);
-    updateOutlineGeometry(browser);
-    observeOutlineBrowser(browser);
     updateOutlineColor(browser, pageColor);
-  }
-
-  // The Glance overlay dims the parent page and covers the content area, so
-  // the parent's outline would be drawn over the dim. Hide it until the Glance
-  // is expanded into a normal tab.
-  function showOutline(visible) {
-    if (!outlineElement) return;
-    outlineElement.style.display = visible ? '' : 'none';
-  }
-
-  function removeOutlineElement() {
-    // Invalidate any icon lookup still in flight: it must not resurrect
-    // --zpt-page-site-color after the element (and the feature) is gone.
-    outlineColorToken++;
-    try { outlineResizeObserver.disconnect(); } catch {}
-    try { if (observedBrowser) outlineResizeObserver.unobserve(observedBrowser); } catch {}
-    observedBrowser = null;
-    try { outlineElement?.remove(); } catch {}
-    outlineElement = null;
-    lastSiteColor = null;
-    root.style.removeProperty('--zpt-page-site-color');
   }
 
   // Write the tint variables for a raw sampled color (null, or strength 0, clears
@@ -1037,7 +949,6 @@
     if (!browser) return;
     if (isTransientGlance(browser)) {
       log('transient Glance selected; preserving parent tint');
-      showOutline(false);
       return;
     }
     const url = browser.currentURI?.spec || '';
@@ -1156,16 +1067,6 @@
     colorSchemeQuery.addEventListener('change', onColorSchemeChange);
   } catch {}
 
-  // The outline is positioned over the page viewport, so it has to follow the
-  // layout: a window resize moves the browser's rect. (The ResizeObserver on
-  // the browser element covers the rest — sidebar expand/collapse, Zen's
-  // compact mode, the toolbar collapsing.)
-  const onWindowResize = () => {
-    const browser = gBrowser.selectedBrowser;
-    if (browser) updateOutlineGeometry(browser);
-  };
-  window.addEventListener('resize', onWindowResize);
-
   // Live-apply the appearance prefs (mix / saturation / lightness / gap / radius /
   // outline / disable-hosts) when they're changed from the Sine settings panel, so the
   // effect is visible without a restart. (The live-mode prefs are read once at
@@ -1236,20 +1137,20 @@
           applyOutlineState();
           // The frame samples the outline color only while something will draw
           // it (config.outline), so the switch changes WHAT a sample yields.
-          // Same propagation as a source change: cached entries are now the wrong
-          // shape, so clear and force one fresh sample — its miss path pushes the
-          // new config. Do NOT push config by iterating tabs (see the
-          // ambient-spread case for why).
+          // Same propagation as a source change: cached entries are now the
+          // wrong shape, so clear and force one fresh sample — its miss path
+          // pushes the new config. Do NOT push config by iterating tabs (see
+          // the ambient-spread case for why).
           if (outlineOn() !== wasOn) {
             themeCache.clear();
             scheduleSample(true);
           }
-          // The switch is expected to be instant, so the page on screen is
-          // handled here rather than on the next tab switch. On: rebuild (or
-          // re-measure) the element and its color. Off: tear the whole thing
-          // down — element, ResizeObserver, site color, in-flight lookup.
-          if (outlineOn()) updateOutlineFor(gBrowser.selectedBrowser);
-          else removeOutlineElement();
+          // The switch is expected to be instant, and the border reappears or
+          // disappears with the attribute itself — no element to rebuild.
+          // On: the fresh sample above re-colors it (until it lands the CSS
+          // fallback chain covers). Off: the only state left to undo is the
+          // site-color variable and any favicon lookup in flight.
+          if (!outlineOn()) clearOutlineColor();
           break;
         }
         case 'zen.page-tint.page-outline-width': {
@@ -1257,18 +1158,16 @@
           OUTLINE_WIDTH = clampInt(prefInt('zen.page-tint.page-outline-width', 2), 0, 8);
           applyCssVarPrefs();
           applyOutlineState();
-          // A width change is normally a pure re-measure. Crossing 0 flips the
-          // feature off/on, which changes the config the frame samples under.
+          // Width is wired straight to the CSS border-width, so a change is a
+          // live reflow of the page by the new width — accepted by ZPT-024
+          // (2px, and changing it is rare). Crossing 0 flips the feature
+          // off/on, which changes the config the frame samples under: same
+          // propagation as the switch above.
           if (outlineOn() !== wasOn) {
             themeCache.clear();
             scheduleSample(true);
+            if (!outlineOn()) clearOutlineColor();
           }
-          // The stroke width is half of the box inset, so the outline's box
-          // has to be recomputed — and the page's own corner shape flips with
-          // the attribute. Width 0 is "off" too, so it takes the same
-          // teardown path as the switch instead of re-creating the element.
-          if (outlineOn()) updateOutlineGeometry(gBrowser.selectedBrowser);
-          else removeOutlineElement();
           break;
         }
         // Color-source changes invalidate every cached sample, since the cache
@@ -1301,7 +1200,6 @@
     try {
       if (colorSchemeQuery && onColorSchemeChange) colorSchemeQuery.removeEventListener('change', onColorSchemeChange);
     } catch {}
-    try { window.removeEventListener('resize', onWindowResize); } catch {}
     try { Services.prefs.removeObserver('zen.page-tint.', prefObserver); } catch {}
     try { if (scheduleRafId) cancelAnimationFrame(scheduleRafId); } catch {}
     try { if (scheduleTimerId) clearTimeout(scheduleTimerId); } catch {}
@@ -1327,7 +1225,7 @@
       }
     } catch {}
     applyTheme(null);
-    removeOutlineElement();
+    clearOutlineColor();
     root.removeAttribute('zen-page-tint-active');
     root.removeAttribute('zen-page-tint-live');
     root.removeAttribute('zen-page-tint-outline');

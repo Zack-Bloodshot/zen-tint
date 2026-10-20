@@ -80,6 +80,7 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-021](#zpt-021) | open | med | frame.js (bulk) | Keep only the page-background matching — delete everything else the previous repo did |
 | [ZPT-022](#zpt-022) | done | low | tint.uc.js + preferences.json | **Page outline: make it optional — a real toggle in the settings** (priority 2) |
 | [ZPT-023](#zpt-023) | done | med | frame.js + tint.uc.js | **Outline color: use the page's own visible colors instead of the favicon** (priority 3) |
+| [ZPT-024](#zpt-024) | done | med | style.css + tint.uc.js | **Page outline overlays page content: make it a real layout border, with fullscreen + Glance guards** (priority 1) |
 
 ---
 
@@ -626,6 +627,66 @@ Decisions taken (do not relitigate without reason):
   [ZPT-022](#zpt-022) (the switch that gates it), the cache rules in
   `AGENTS.md`.
 
+### ZPT-024
+**Page outline overlays page content: make it a real layout border**
+- **Status:** done · **Priority:** 1 · **Sev:** med · **Area:** style.css (target) + tint.uc.js (dead code) — research: [`research/zen-wireframe-2.0-border.md`](tickets/research/zen-wireframe-2.0-border.md)
+- **Symptom:** the outline was a floating overlay — a fixed-position
+  `div#zpt-page-outline` placed on the browser's rect, inset by half the stroke
+  width. The chrome paints above the page, so the stroke covered the page's
+  outermost 2px; on YouTube that band held the bottom thumbnail row, its
+  duration badges and title text, and the line cut through them. It read as a
+  line drawn *over* the page, not as the page's edge. The same overlay also
+  painted across fullscreen video — no `inDOMFullscreen` /
+  `sizemode="fullscreen"` guard existed — where a page boundary has no meaning.
+- **Goal:** the page must end where the line starts. No page pixel painted
+  over, on any edge, at any corner — and no outline in fullscreen at all.
+- **Decision:** the Wireframe 2.0 technique: a **real CSS border on
+  `#zen-tabbox-wrapper`** (the wrapper the research proves), so the page is
+  laid out inside the stroke instead of underneath it, plus `overflow: hidden`
+  + `border-radius` + `corner-shape: superellipse(4)` so the page is clipped to
+  the border's inner rounded edge and line and page share one corner shape. No
+  transparent border is reserved while off (a permanent inset was not
+  accepted), so toggling/width changes reflow the page by the stroke width —
+  2px, rare, documented as the honest price.
+- **What shipped:**
+  - `style.css`: the overlay block is gone; in its place a gated
+    (`zen-page-tint="on"` + `zen-page-tint-outline="on"`) border rule on the
+    wrapper, a gated zeroing of the tab stack's margin/padding so the page
+    fills the border's content box, the fullscreen guard
+    (`:root[inDOMFullscreen]`, `:root[sizemode="fullscreen"]` — border AND
+    clip removed), and the Glance guard
+    (`:has(.browserSidebarContainer.zen-glance-overlay)` drops just the border
+    width, so the corner clip cannot flicker).
+  - `tint.uc.js`: the whole fixed-element geometry path is deleted —
+    `OUTLINE_ELEMENT_ID`, `outlineElement`, `ensureOutlineElement()`,
+    `outlineOrigin`, `updateOutlineGeometry()`, `outlineResizeObserver`,
+    `observedBrowser`, `observeOutlineBrowser()`, `showOutline()`,
+    `removeOutlineElement()`, and the re-measure call sites on tab switch and
+    window resize. Kept: `outlineOn()` / `applyOutlineState()` (the
+    `zen-page-tint-outline` attribute), the width pref →
+    `--zpt-page-outline-width`, and all of the color plumbing
+    (`requestOutlineColor()` / `updateOutlineColor()` / `setSiteColor()` /
+    `clearOutlineColor()` / `--zpt-page-site-color`, favicon fallback
+    included). `updateOutlineFor()` is now color-only. The cache-hit path
+    still does zero IPC and no layout read.
+  - Compact mode: the border is still drawn (it is the page's boundary, and
+    Zen's screen-edge hover strips stay reachable) — unlike Wireframe, which
+    suppresses it for its own aesthetic.
+  - Split view: NOT solved — the border is one rectangle around all panels.
+    Known limitation; the per-container spike (`.browserSidebarContainer`) is
+    recorded in the ticket and the README, to be measured before committing.
+- **Risks owned:** wrapper-level `overflow: hidden` needs a manual pass
+  (menus, findbar, PiP, devtools, library, Glance — Wireframe says
+  wrapper-level was fine and tabpanel-level was not); `corner-shape` support
+  falls back to plain `border-radius` arcs; the
+  `#zen-tabbox-wrapper` selector is the contract — a future Zen re-boxing
+  kills the outline and falls back to the per-container border.
+- **Done in:** ZPT-D011.
+- **Refs:** [ZPT-019](#zpt-019) (the overlay iteration this derives from),
+  [ZPT-022](#zpt-022) (the toggle whose lifecycle this simplifies),
+  [ZPT-023](#zpt-023) (the color plumbing this keeps), [ZPT-021](#zpt-021)
+  (the cleanup this touches last — coordinate the merge).
+
 ---
 
 ## Done log
@@ -634,6 +695,39 @@ Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
 _(The tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D011
+**The page outline becomes a layout border, not an overlay** — `done`
+- `style.css` replaced the fixed-position `#zpt-page-outline` block with a real
+  border rule on `#zen-tabbox-wrapper` (gated on `zen-page-tint` +
+  `zen-page-tint-outline`): `box-sizing: border-box` so the stroke eats the
+  wrapper's existing box instead of pushing past it, `overflow: hidden` clipping
+  the page to the padding box (corners round to radius minus width), and
+  `corner-shape: squircle` / `superellipse(4)` for the true squircle. The tab
+  stack (`#tabbrowser-tabbox` / `#tabbrowser-tabpanels`) gets a gated
+  margin/padding zeroing so the page fills the border's content box.
+- Two CSS guards ship with it: fullscreen (`inDOMFullscreen` and
+  `sizemode="fullscreen"`) removes the border AND the clip entirely (fullscreen
+  is not a boundary state; leaving restores it with no JS bookkeeping), and a
+  Glance (`:has(.browserSidebarContainer.zen-glance-overlay)`) drops only the
+  border width so the corner clip cannot flicker for the glance's lifetime.
+- `tint.uc.js` lost the entire outline geometry path (element, rect reads,
+  `ResizeObserver`, window-resize re-measure, `showOutline` display toggling —
+  ~130 lines). What remains is `outlineOn()` / `applyOutlineState()`, the width
+  variable, and the color plumbing, which is why the feature needs: page color
+  → favicon → tint foreground → nothing. `updateOutlineFor()` is color-only;
+  the off-path (`clearOutlineColor()`) is its teardown.
+- The cache-hit path still does zero IPC and no layout read: it sets the color
+  variable and derives the rest in CSS. Also accepted: toggling/width changes
+  reflow the page by the stroke width (no transparent border is reserved while
+  off — a permanent inset for nothing was not acceptable).
+- Split view is a KNOWN LIMITATION, deliberately open: one rectangle around all
+  panels, not one line per page. The per-container (`.browserSidebarContainer`)
+  treatment is recorded as an unproven spike in the ticket, the README's known
+  limitations and AGENTS.md.
+- The tint's own rule is unchanged and now reads cleaner: the tint only ever
+  paints chrome surfaces, the outline only sits beside the page.
+- Version `1.4.0` → `1.5.0` in `theme.json` **and** the `// @version` header.
 
 ### ZPT-D010
 **Outline color from the page's own visible colors** — `done`
