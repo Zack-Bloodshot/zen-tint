@@ -1,6 +1,7 @@
 sync-to-zen.sh
 .scguard/
 *.profraw
+tickets/
 
 # Demo MP4s live in assets/ for Reddit/Discord upload, not the repo (GIFs are committed)
 assets/*.mp4
