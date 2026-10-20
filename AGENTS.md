@@ -24,9 +24,9 @@ the browser chrome, loads `style.css`, and renders the settings panel from
 | File | Runs where | Role |
 |---|---|---|
 | `theme.json` | Sine manifest | Mod id/version, entry points. Loads `tint.uc.js` into `chrome://browser/content/browser.xhtml`, `style.css` as chrome style (`content` style is empty on purpose). |
-| `tint.uc.js` | **Chrome** process (privileged, same scope as `browser.xhtml`) | The brain. Listens for tab/navigation events, owns the LRU cache, decides what to tint, writes CSS variables onto `<html>`, and drives the content script over the message manager. |
+| `tint.uc.js` | **Chrome** process (privileged, same scope as `browser.xhtml`) | The brain. Listens for tab/navigation events, owns the LRU cache, decides what to tint, writes CSS variables onto `<html>`, drives the content script over the message manager, and draws the page outline (position + favicon color). |
 | `frame.js` | **Content** process (per browser, loaded via `loadFrameScript`) | The sampler. Reads the page's color, observes theme-related mutations, runs live-mode polling, and pushes colors back to chrome. |
-| `style.css` | Chrome stylesheet | Consumes the CSS variables the chrome script sets and paints the tinted surfaces. Also the frame gap/radius/shadow geometry. |
+| `style.css` | Chrome stylesheet | Consumes the CSS variables the chrome script sets and paints the tinted surfaces. Also the frame gap/radius/shadow geometry, and the page outline's stroke. |
 | `preferences.json` | Sine settings panel | Every entry maps 1:1 to a `zen.page-tint.*` pref in `about:config`. Cosmetic only — the defaults live in the JS. |
 | `README.md` | Users | Long, deliberately detailed. Keep it accurate; it is referenced from the Sine store listing. |
 | `assets/` | Users | Demo GIFs / social card used by the README. |
@@ -51,6 +51,11 @@ repackaged/reloaded into Zen, not from a bare file copy.
    a black-or-white foreground by Rec 601 luminance (`readableFg`), writes
    `--zen-tab-header-background` / `--zen-tab-header-foreground`, and flips the
    `zen-page-tint` attribute. `style.css` does the rest.
+7. Separately, the chrome draws the **page outline**: a squircle stroke around
+   the browser's rect (a fixed-position element in the chrome document) in the
+   site's own color, which comes from the favicon and is cached per host in
+   `zen.page-tint.icon-colors`. This is chrome-side only — no IPC, no content
+   process, and no change to the shape of the theme cache.
 
 **Message names** (both scripts hardcode them; keep them in sync):
 `zen-page-tint:theme` (content→chrome), `zen-page-tint:config` (chrome→content),
@@ -105,9 +110,17 @@ These are load-bearing. Violating them is how this project regressed before
   `prefBool` / `prefInt` / `prefStr` helpers, each with its own `try`.
 - **Restart vs live prefs.** The live-mode group is read **once** at chrome-script
   load and needs a restart (Sine shows the restart toast via `"restart": true` in
-  `preferences.json`). The CSS-variable prefs and `zen.page-tint.color-source`
-  are applied live through the `zen.page-tint.` prefix observer. New prefs must
-  land in the right bucket and be annotated with the matching comment here.
+  `preferences.json`). The CSS-variable prefs, `zen.page-tint.color-source` and
+  `zen.page-tint.page-outline-width` are applied live through the
+  `zen.page-tint.` prefix observer. New prefs must land in the right bucket and
+  be annotated with the matching comment here.
+- **The outline's geometry is chrome-side and must be re-measured.** The outline
+  is a fixed-position element in the chrome document, moved onto the browser's
+  `getBoundingClientRect()`. It is re-measured on tab switch, on window resize
+  and by a `ResizeObserver` on the browser element (sidebar expand/collapse,
+  compact mode, the toolbar collapsing). A new layout path that moves the
+  browser without changing its size needs its own trigger — a stale outline is
+  the symptom.
 - **A config change that alters what a sample yields must re-sample in the
   frame.** The color source lives in the content process, so the chrome side
   can't force a re-sample under new rules — it can only push the new config and
@@ -147,20 +160,30 @@ These are load-bearing. Violating them is how this project regressed before
 - Attribute contract between JS and CSS: `zen-page-tint` (a page is tinted),
   `zen-page-tint-ambient` (gradient edges present), `zen-page-tint-active`
   (mod loaded — smoothing is scoped to this so the fade survives leaving a tinted
-  page), `zen-page-tint-live` (live mode on).
+  page), `zen-page-tint-live` (live mode on), `zen-page-tint-outline` (the drawn
+  boundary is on — this also decides the page's own corner shape).
 - **Version lives in two places** and must move together: `theme.json` `version`
   and the `// @version` header in `tint.uc.js`. Commit history uses
   `Release vX.Y.Z: <summary>`, `fix: ...`, `docs: ...`.
 - Surface-level geometry knobs (`--zpt-frame-gap`, `--zpt-frame-radius`,
-  `--zpt-frame-separator-width`) are prefs, but `--zpt-frame-shadow` is still a
-  raw CSS knob in `style.css` `:root`.
-- **The frame separator must be drawn OUTSET, in the gap, never over the page's
-  own pixels.** It is the hairline that keeps the page bounded while the tint
-  makes it continuous. Painting it over the content (an inset shadow on the
-  browser container, a background on the page) would be a second coat over
-  pixels the mod doesn't own — the same class of bug as the double-tint layering
-  below. Its color is derived in CSS from `--zen-tab-header-foreground`, so it
-  flips light/dark with the page and needs no knob of its own.
+  `--zpt-page-outline-width`) are prefs, but `--zpt-frame-shadow` and
+  `--zpt-page-outline-radius` are still raw CSS knobs in `style.css` `:root`.
+- **The page outline is a BORDER, and only a border.** It is drawn over the
+  page's outermost pixels (a squircle stroke around the whole viewport), so it
+  IS a coat over content the mod doesn't own. That is allowed for a border and
+  **forbidden for the tint overlay** — the tint must never cover the page. The
+  two jobs must stay clearly separated: the tint lives on chrome surfaces, the
+  outline lives on the page's edge, and neither may be used to do the other's
+  job. The v1.1.0 separator was the opposite case: it was drawn OUTSET, in the
+  frame gap, so it never touched the page — and therefore vanished on the
+  sidebar edge, because the gap only exists on three sides.
+- **The drawn outline owns the page's corner shape.** While it is on, the
+  content container's `--zen-native-inner-radius` is forced to `0`: a page with
+  its own rounded corners and an outline with squircle corners are two
+  competing shapes, and the outline's corner would cut across the page's
+  clipped corner instead of tracing it. The outline's radius is a CSS knob
+  (`--zpt-page-outline-radius`), kept small so the squircle corner cuts only
+  a couple of pixels inside the page's square corner.
 
 ## Testing / verifying a change
 
@@ -174,10 +197,16 @@ There is no automated harness. Verify in a real Zen build:
    `[zen-tint frame]` logs in the Browser Console (`Ctrl/Cmd-Shift-J`).
 4. Manual checklist: tab switch on a light and a dark page; revisit a tab (should
    be a zero-IPC cache hit); a page whose color is in `<meta name="theme-color">`
-   only; an `about:` page (should keep Zen's default chrome); a
-   per-site-disabled host; `prefers-color-scheme` flip; live mode on a playing
-   video; `ambient-spread` above 0 (gradient) and back to 0; the settings panel
-   applying each live pref without a restart.
+   only; an `about:` page (should keep Zen's default chrome and draw **no**
+   outline); a per-site-disabled host; `prefers-color-scheme` flip; live mode on
+   a playing video; `ambient-spread` above 0 (gradient) and back to 0; the
+   settings panel applying each live pref without a restart.
+5. Outline checklist: the boundary is drawn on **all four** sides (especially
+   the one against the sidebar); it is in the site's own color, not a grey; it
+   follows the browser when the window is resized and when the sidebar is
+   expanded/collapsed; it disappears on an `about:` page and on a
+   per-site-disabled host; a monochrome-logo site falls back to the neutral
+   line; `zen.page-tint.page-outline-width = 0` turns it off entirely.
 
 Performance is the product. When in doubt, measure tab-switch latency under a
 large tab session before and after, and prefer the cheaper path.

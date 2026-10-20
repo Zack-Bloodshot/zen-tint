@@ -99,10 +99,10 @@
   {
     "type": "string",
     "value": "number",
-    "property": "zen.page-tint.frame-separator",
-    "label": "Frame separator (px): hairline between the page and the tinted chrome, so the page reads as a bounded object instead of dissolving into it. Follows the page's light/dark automatically. 0 = off.",
-    "defaultValue": 1,
-    "placeholder": "1"
+    "property": "zen.page-tint.page-outline-width",
+    "label": "Page outline (px): a squircle stroke drawn around the whole page, in the site's own color (taken from its favicon). It is the page's boundary, so the frame reads as continuous AND bounded — on all four sides, including the edge against the sidebar. 0 = off.",
+    "defaultValue": 2,
+    "placeholder": "2"
   },
 
   {

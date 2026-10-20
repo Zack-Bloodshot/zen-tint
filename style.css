@@ -13,12 +13,25 @@
   --zpt-frame-gap: 5px;
   --zpt-frame-radius: 14px;
   --zpt-frame-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.10);
-  /* Hairline drawn at the content edge so the page reads as a bounded object
-     instead of dissolving into the tinted chrome. The width is a pref
-     (zen.page-tint.frame-separator); the color is derived from the tint's own
-     foreground, so it flips light/dark with the page and needs no knob. */
-  --zpt-frame-separator-width: 1px;
-  --zpt-frame-separator-color: color-mix(in srgb, var(--zen-tab-header-foreground, #000) 30%, transparent);
+  /* The drawn boundary: a squircle stroke around the whole page viewport, in
+     the site's own primary color. The width is a pref
+     (zen.page-tint.page-outline-width); the color is derived here, so the
+     fallback chain lives in one place:
+       site color (--zpt-page-site-color, set from the favicon)
+         -> the tint's own foreground, a neutral line that flips light/dark
+            with the page (this is what the old hairline used)
+         -> nothing at all (an untinted page draws no outline)
+     The page's own corner radius is squared while the outline is on, so the
+     drawn boundary is the only shape around the content — see the
+     .browserSidebarContainer rule below. */
+  --zpt-page-outline-width: 2px;
+  /* Corner radius of the drawn boundary. Deliberately small: the page's own
+     corners are squared while the outline is on, so the outline's squircle
+     corners cut INSIDE the page's square corners — a big radius would leave a
+     visible wedge of page outside the line. */
+  --zpt-page-outline-radius: 12px;
+  --zpt-page-outline-fallback: color-mix(in srgb, var(--zen-tab-header-foreground, #000) 30%, transparent);
+  --zpt-page-outline-color: var(--zpt-page-site-color, var(--zpt-page-outline-fallback));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -186,6 +199,16 @@
          frame-radius knob instead. */
       --zen-native-inner-radius: 0 0 var(--zpt-frame-radius) var(--zpt-frame-radius);
       --zen-big-shadow: none;
+    }
+
+    /* The drawn outline owns the page's shape while it is on. A page whose own
+       corners are rounded (a circular arc, and only at the bottom) breaks the
+       outline's continuity: the line's squircle corner would cut ACROSS the
+       page's clipped corner instead of tracing it, leaving a colored stroke
+       over the neutral gap. Squaring the page and letting the drawn boundary
+       be the only shape keeps the two from competing. */
+    :root[zen-page-tint-outline="on"] &:not(.zen-glance-overlay) {
+      --zen-native-inner-radius: 0;
     }
   }
 
@@ -439,28 +462,14 @@
        oscillate between the toolbar and the page — the "twitch" (#11). Leaving the
        container's overflow at Zen's default keeps the content clipped where it
        belongs and the ring still paints. */
-    /* The separator hairline is listed FIRST so it paints over the gap ring: a
-       1px spread covers the outermost 1px of the gap, right against the content
-       edge, while the ring fills the rest of it. First-listed shadows paint over
-       later ones, so the order here IS the layer order.
-
-       Both shadows are OUTSET, so they paint in the frame gap — chrome pixels.
-       Neither touches the page itself, which matters because a translucent tint
-       over the page's own pixels would be a second coat over content we don't
-       own. */
+    /* The gap ring is the only thing drawn here now. The hairline that used to
+       ride on top of it is gone: it was drawn OUTSET in the gap, and the gap
+       only exists on three sides (the sidebar occupies the fourth), so the
+       line vanished on exactly the edge the user asked for. The boundary is
+       drawn now instead — see "Page outline" below. */
     &:not([zen-compact-mode="true"]) .browserSidebarContainer:not(.zen-glance-background):not(.zen-glance-overlay) {
       box-shadow:
-        0 0 0 var(--zpt-frame-separator-width) var(--zpt-frame-separator-color),
         0 0 0 var(--zpt-frame-gap) var(--zpt-tint, var(--zen-tab-header-background, var(--zen-main-browser-background))) !important;
-    }
-
-    /* Compact mode has no gap (the frame sits flush to the window edge), so the
-       ring has nowhere to live and an outset shadow would paint over the page's
-       own edge pixels. There the hairline is drawn INSET instead, framing the
-       content from inside without reaching into the chrome. */
-    &[zen-compact-mode="true"] .browserSidebarContainer:not(.zen-glance-background):not(.zen-glance-overlay) {
-      outline: var(--zpt-frame-separator-width) solid var(--zpt-frame-separator-color);
-      outline-offset: calc(-1 * var(--zpt-frame-separator-width));
     }
 
     #zen-sidebar-splitter,
@@ -509,6 +518,60 @@
       fill: var(--zen-tab-header-foreground, currentColor) !important;
     }
   }
+}
+
+/* ---------- Page outline (the drawn boundary) ----------
+ *
+ * The tint makes the chrome continuous with the page. Taken too far, that
+ * erases where the page ENDS — a sidebar and a page in the same color read as
+ * one flat field. So the boundary is DRAWN, deliberately: a squircle stroke
+ * around the whole page viewport, on all four sides, continuously, in the
+ * site's own primary color (--zpt-page-site-color, taken from its favicon by
+ * tint.uc.js).
+ *
+ * It is a BORDER, and a border is allowed to sit on top of the page's
+ * outermost pixels — that is what a border is. The TINT is not allowed to (see
+ * the one-tint-layer invariant in AGENTS.md). The two jobs stay separate: the
+ * tint lives on chrome surfaces, the outline lives on the page's edge, and
+ * neither may be used to do the other's job.
+ *
+ * The element itself is created and positioned by tint.uc.js — it has to
+ * track the browser's rect, and only the chrome side knows it — so this block
+ * only styles it. It lives in the document body, NOT inside the browser's
+ * container, so nothing clips it to the page's own shape, and it is
+ * position:fixed with viewport coordinates (which is exactly what
+ * getBoundingClientRect reports).
+ */
+#zpt-page-outline {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  box-sizing: border-box;
+  border: var(--zpt-page-outline-width, 2px) solid var(--zpt-page-outline-color, transparent);
+  border-radius: var(--zpt-page-outline-radius, 12px);
+  /* A true squircle: CSS border-radius only ever makes circular arcs, which
+     read as a different shape next to a superellipse. Firefox's corner-shape
+     does it properly — superellipse() is the newer spelling, squircle() the
+     older one, and the border-radius above is the fallback for a Firefox
+     without either. */
+  corner-shape: squircle;
+  corner-shape: superellipse(4);
+  pointer-events: none;
+  /* The same stacking level as the content wrapper (#zen-appcontent-wrapper is
+     z-index 3), and later in tree order, so the outline paints exactly where
+     the page content paints — above it, but UNDER the chrome that floats over
+     the page (the Zen library, a panel, the sidebar when it overlaps). */
+  z-index: 3;
+  display: none;
+}
+
+/* The outline belongs to the tinted page: an untinted page (about:, a
+   per-site-disabled host, a page with no declared background) keeps Zen's own
+   chrome and gets no boundary either. */
+:root[zen-page-tint="on"][zen-page-tint-outline="on"] #zpt-page-outline {
+  display: block;
 }
 
 /* ---------- Color-change smoothing ----------

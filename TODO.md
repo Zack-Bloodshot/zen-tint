@@ -27,14 +27,19 @@ seriously:
    The boundary becomes a deliberate thing: a squircle outline around the whole
    viewport, in the page's primary color. → [ZPT-019](#zpt-019)
 
-And the previous repo's inset frame (the gap, the radius, the drop shadow —
-the "page as a floating card" treatment) goes, because it says "the page is a
-card", which is the opposite of "the page and the frame are one object".
-→ [ZPT-020](#zpt-020)
+And the previous repo's behaviours — the pixel sampler, the YouTube ambient
+path, live-mode polling, the directional gradient, the source switch — go, so
+the mod does exactly one thing: **match the page's declared background**.
+→ [ZPT-021](#zpt-021)
 
-**Order:** ZPT-019 is the visible result and is the next thing worked on, but
-it lands together with ZPT-020 — removing the inset and drawing the outline
-are two halves of one change. ZPT-021 is the cleanup that follows.
+**Order:** ZPT-019 is the visible result and is the next thing worked on. It
+is independent of the cleanup, so the two can land in either order. ZPT-021
+is the cleanup that makes the mod one thing.
+
+**One thing left open:** the upstream **inset frame** (gap + radius + drop
+shadow — the "page as a floating card" look) is presentation, not matching, so
+it stays for now. It matters only because it decides where ZPT-019's outline
+is drawn: inside the tinted strip, or at the window edge.
 
 Decisions taken (do not relitigate without reason):
 
@@ -43,7 +48,7 @@ Decisions taken (do not relitigate without reason):
 | Which surfaces | **All chrome surfaces** | No `style.css` change — the source feeds the one tint variable every surface already consumes. |
 | Number of behaviours | **One** (declared background) | The `content` source is deleted, not deprecated — see [ZPT-021](#zpt-021). |
 | Transparent `body`/`html` | **Clear the tint → Zen theme** | Predictable, but see [ZPT-014](#zpt-014) (wrapper backgrounds get no tint). |
-| The page's edge | **A drawn outline, not a gap** | The inset frame goes; the boundary is painted — see [ZPT-019](#zpt-019) / [ZPT-020](#zpt-020). |
+| The page's edge | **A drawn outline** | The boundary is painted, in the site's primary color — see [ZPT-019](#zpt-019). The upstream inset frame stays for now (presentation, not matching). |
 | Pref lifecycle | **Live (no restart)** | Same treatment as the CSS-variable prefs: clear cache + force resample. |
 
 ## Status legend
@@ -69,9 +74,9 @@ Decisions taken (do not relitigate without reason):
 | [ZPT-016](#zpt-016) | open | low | frame.js | WhatsApp: partial mismatch |
 | [ZPT-017](#zpt-017) | done | low | style.css | Frame separator: a hairline so the page stays bounded |
 | [ZPT-018](#zpt-018) | accepted | med | tint.uc.js | No per-site color-source override |
-| [ZPT-019](#zpt-019) | open | med | style.css + frame.js | **Page outline: wrap the whole viewport as a squircle, in the page's primary color** (priority 1) |
-| [ZPT-020](#zpt-020) | open | med | style.css | Remove the previous repo's inset frame (gap + radius + shadow) |
-| [ZPT-021](#zpt-021) | open | med | frame.js (bulk) | Page-background becomes the ONLY behaviour (drop the `content` source) |
+| [ZPT-019](#zpt-019) | done | med | style.css + tint.uc.js | **Page outline: wrap the whole viewport as a squircle, in the site's primary color** (priority 1) |
+| [ZPT-020](#zpt-020) | accepted | med | — | Keep only the page-background matching (merged into ZPT-021) |
+| [ZPT-021](#zpt-021) | open | med | frame.js (bulk) | Keep only the page-background matching — delete everything else the previous repo did |
 
 ---
 
@@ -298,11 +303,11 @@ Decisions taken (do not relitigate without reason):
   source to override, so a per-site source list has nothing to switch.
 
 ### ZPT-019
-**Page outline: wrap the whole viewport as a squircle, in the page's primary color**
-- **Status:** open · **Priority:** 1 (next up) · **Sev:** med · **Area:** style.css + frame.js (sampling) + tint.uc.js (plumbing)
+**Page outline: wrap the whole viewport as a squircle, in the site's primary color**
+- **Status:** done · **Priority:** 1 · **Sev:** med · **Area:** style.css + tint.uc.js (chrome-side color extraction)
 - **Goal:** the separator stops being a hairline hiding in the frame gap and
   becomes a deliberate frame drawn **around the whole page viewport** — all four
-  sides, continuously, with squircle corners — painted in the page's **primary
+  sides, continuously, with squircle corners — painted in the **site's primary
   color** instead of a grey derived from the tint's foreground.
 - **Why the v1.1.0 implementation misses the mark** (found in the manual pass):
   - It is drawn **outset, in the frame gap**, and the gap only exists on three
@@ -316,44 +321,76 @@ Decisions taken (do not relitigate without reason):
   - Its color is `color-mix(--zen-tab-header-foreground 30%, transparent)` — a
     neutral grey/black/white derived from the tint's foreground. It reads as
     "a line someone drew", not as part of the page.
-- **Definition (proposed — confirm before implementing):**
+- **Where the primary color comes from: the site's favicon.**
+  The technique is borrowed from
+  [zen-tab-groups](https://github.com/oom333/zen-tab-groups) (MIT), which colors
+  its section headers from the site icon:
+  - **Icon candidates, in order:** the open tab's own `image` attribute (its
+    favicon URL), then `page-icon:https://www.<site>/`, then
+    `page-icon:https://<site>/`, then `https://<site>/favicon.ico`.
+  - **Load** it into an `Image` in the **chrome** process, with a 5s timeout.
+  - **Sample** it: draw to a 32×32 canvas with `imageSmoothingEnabled = false`
+    (smoothing invents in-between shades while scaling), then read the pixels.
+  - **Filter:** ignore pixels with alpha < 128; ignore near-black (L < 0.2) and
+    white/grey (L > 0.85 or S < 0.25). If ≥ 75% of the opaque pixels were dark,
+    or fewer than 8% were colorful, the icon has no usable color → no outline
+    color at all.
+  - **Pick:** count exact shades AND 12 hue families of 30°. Take the most
+    common shade if it clearly leads (≥ 1.5× the runner-up and ≥ 25% of the
+    colorful pixels); otherwise take the average of the biggest hue family,
+    weighting the neighbouring families at 0.5 so a gradient crossing a family
+    border isn't split in two.
+  - **Clamp** for visibility: L into [0.45, 0.72], S ≥ 0.45.
+- **Why the favicon, and not `<meta name="theme-color">` or a CSS custom
+  property:**
+  - It **is** the site's primary color — the brand mark, not a page's idea of
+    one. A page's `theme-color` meta is often the background (GitHub's is
+    `rgb(30,35,39)`), and a CSS variable scan has to guess at property names
+    across every framework.
+  - It is **per-site**, so it can be cached once per host and reused by every tab
+    on that host, instead of per page.
+  - It needs **no content process**: the chrome already has the tab, its favicon
+    and the host. No new field in the theme message, no `frame.js` change, no
+    change to the shape of the theme cache.
+  - tab-groups already solved the hard parts: monochrome logos (→ no color), the
+    grey placeholder icon Zen shows for unvisited sites (→ try the next
+    candidate), and cross-origin tainting (`page-icon:` URLs are privileged and
+    untainted; a tainted canvas throws in `getImageData` and must be caught).
+  - **Caveats to design around:** the favicon is only known after the tab
+    loads, so the outline color arrives a beat after the background tint; a
+    monochrome or white logo yields no color; the color is per-site, so a
+    multi-brand host (github.com vs gist.github.com) can be off.
+  - **Licensing:** zen-tab-groups is MIT — reusing the algorithm means keeping
+    its copyright notice and crediting it (README Credits section + LICENSE).
+- **Fallback chain:** favicon color → the tint's own foreground (today's
+  hairline) → no outline.
+- **Definition (as shipped):**
   - **Where:** an overlay drawn **on** the page viewport's edge, over the
     content, on all four sides. It is a deliberate border (the way a
     reader-mode frame or a PDF viewer draws one), not a tint layer — see the
     invariant note below.
   - **Shape:** a squircle — continuous corners, not circular arcs. CSS
     `border-radius` produces circular arcs, which read as a different shape
-    next to a superellipse. A true squircle needs an SVG superellipse path
-    (or an approximation: a large radius plus a second, smaller inner radius).
-  - **Color:** the page's primary color (see the open question below), not the
-    foreground.
-  - **Fallback chain:** primary color → the declared background (so the frame
-    is at least in family) → today's foreground-derived hairline → nothing.
-  - **Width:** a pref, replacing `zen.page-tint.frame-separator`
-    (`zen.page-tint.page-outline-width`?), default 2px. `0` = off.
-- **Open question — what counts as the "primary color"?** This decides the
-  sampling cost, the false-positive rate, and whether the outline is a brand
-  accent or a slightly-off background. Candidates, in the order they should be
-  tried:
-  1. `<meta name="theme-color">` — the site's declared brand color. One read,
-     no layout cost, broadly supported. Caveat: on some sites it is the
-     *background*, not the accent (GitHub's is `rgb(30,35,39)`).
-  2. A CSS custom property on the document element, scanning conventional
-     names: `--primary-color`, `--accent-color`, `--brand-color`,
-     `--color-primary`, `--primary`, `--accent`, and the `--accent-*` family
-     used by Tailwind/Radix/shadcn-style sites.
-  3. A hue-rotated version of the declared background (the most saturated hue
-     on the page, pushed to full chroma) — free, but a guess.
-  4. The tint's own foreground (today's behaviour).
-  **This needs a decision before implementation.**
-- **Plumbing (a primary color is a NEW sampled value):**
-  - `frame.js`: a `readPrimaryColor(doc)` step, normalized like every other
-    color, plus a new field in the theme message (`accent`).
-  - `tint.uc.js`: write `--zpt-accent` on the root and clear it when there is
-    no accent. The cache stores `{ bg, edges }` today — it must also store the
-    accent, or the outline comes back empty on a cache hit.
-  - `style.css`: the outline rule consuming `--zpt-accent`.
-- **New invariant (to be written into `AGENTS.md`):** the outline is a
+    next to a superellipse. Firefox's `corner-shape: squircle` /
+    `superellipse()` draws the real thing, so no SVG path is needed; the
+    radius is a CSS knob (`--zpt-page-outline-radius`, 12px).
+  - **Width:** `zen.page-tint.page-outline-width`, replacing
+    `zen.page-tint.frame-separator`. Default 2px. `0` = off.
+  - **Where the outline sits relative to the inset frame:** the upstream frame
+    (gap/radius/shadow) stays, so the outline is drawn around the browser
+    container — inside the tinted strip, on the page's own pixels. The open
+    question from the original ticket is settled this way; see ZPT-021 for the
+    cleanup that does not touch it.
+- **Plumbing (all chrome-side, no IPC):**
+  - `tint.uc.js`: an icon-color resolver — candidates, loader, `dominantColor()`,
+    a per-site cache (`zen.page-tint.icon-colors`, a JSON pref like
+    tab-groups'), and the "unsure sites" retry for placeholder icons.
+  - The resolved color is written as `--zpt-page-site-color` on the root; the
+    fallback chain (site color → the tint's foreground → nothing) lives in
+    `style.css` as `--zpt-page-outline-color`.
+  - The cache is per-SITE, so it does not disturb the existing per-URL theme
+    cache (`{ bg, edges }`) — the outline color is looked up separately by host.
+- **New invariant (written into `AGENTS.md`):** the outline is a
   deliberate 1–2px border drawn over the page's outermost pixels, so it IS a
   coat over content the mod doesn't own. That is allowed for a border and
   **forbidden for the tint overlay** — the tint must never cover the page.
@@ -362,73 +399,42 @@ Decisions taken (do not relitigate without reason):
   other's job.
 - **Also in this ticket:** the separator the user originally asked for — a
   line on the **sidebar's** content-facing edge — falls out of the same work,
-  because a frame around the page touches that edge. Decide whether it stays
-  a separate line or is implied by the frame.
-- **Depends on:** lands together with [ZPT-020](#zpt-020) (the inset frame it
-  replaces is what the current hairline hides inside).
-- **Refs:** ZPT-D007 (the hairline this replaces), [ZPT-020](#zpt-020),
-  [ZPT-021](#zpt-021) (the cleanup it should land after or with).
+  because a frame around the page touches that edge. **Decided: implied by the
+  frame**, not a separate line — the outline's left edge IS that line.
+- **Done in:** ZPT-D008.
+- **Depends on:** nothing — the favicon color is independent of the color
+  source, so this can land before or after [ZPT-021](#zpt-021).
+- **Refs:** ZPT-D007 (the hairline this replaces),
+  [zen-tab-groups](https://github.com/oom333/zen-tab-groups) (the icon-color
+  technique), [ZPT-021](#zpt-021).
 
 ### ZPT-020
-**Remove the previous repo's inset frame (gap + radius + shadow)**
-- **Status:** open · **Priority:** 2 (lands with ZPT-019) · **Sev:** med · **Area:** style.css + tint.uc.js (prefs) + preferences.json + README
-- **Goal:** drop the edge-to-edge frame treatment inherited from the upstream
-  project, so the page sits flush in its window and the new outline
-  ([ZPT-019](#zpt-019)) is the only thing marking its boundary.
-- **What the frame is today:**
-  - `--zpt-frame-gap` (default 5px): `#zen-appcontent-wrapper` gets a margin,
-    which **insets the page from the window edge**, leaving a strip of chrome
-    around it. The strip is filled with the tint by an outset box-shadow on
-    `.browserSidebarContainer` (the "gap ring").
-  - `--zpt-frame-radius` (default 14px): the content wrapper and the browser
-    container get rounded corners (bottom only in non-compact mode).
-  - `--zpt-frame-shadow` (a raw CSS knob): a drop shadow under the inset page.
-  - The result is a "floating card" look: the page is a rounded rectangle
-    floating inside the window.
-- **Why remove it:**
-  - It is the previous repo's idea, not this fork's. The fork's idea is "the
-    chrome continues the page" — an inset frame fights that: the strip between
-    the window edge and the page is a hard boundary that says *the page is a
-    card*, which is the opposite of *the page and the frame are one object*.
-  - The gap is also where the current separator hides
-    ([ZPT-019](#zpt-019)), so the two changes are two halves of one design.
-  - The gap costs real screen space, and it drags the whole compact-mode
-    special case with it.
-- **What has to be checked before removing it** (this is not a one-line delete):
-  - **Compact mode:** the flush behavior and Zen's screen-edge hover triggers
-    are currently preserved *by* the compact-mode overrides
-    (`margin: 0 !important`, shadow dropped, radius half-applied). If the gap
-    goes, those overrides can go too — but confirm Zen's edge-hover targets
-    still work before touching them.
-  - **The gap ring:** the outset box-shadow on `.browserSidebarContainer` is
-    what fills the strip with the tint. With no strip, the tint only lives on
-    the chrome surfaces — check that the page doesn't end up with a bare
-    chrome-colored band around it.
-  - **The prefs:** `--zpt-frame-gap` and `--zpt-frame-radius` are exposed in the
-    Sine panel and documented in the README; removing the frame removes those
-    entries and rows.
-  - `#zen-appcontent-wrapper` also carries `overflow: hidden` and
-    `isolation: isolate` for the rounded frame — check whether either is
-    load-bearing for anything else before removing them.
-  - The `--zpt-frame-shadow` knob goes with it, or is re-purposed for the new
-    outline's shadow.
-- **Alternative reading (confirm before implementing):** if "the center part"
-  was meant to refer to something other than this inset frame — e.g. Zen's
-  window split / panel divider, or the `zen-compact-mode` special-casing —
-  say so and this ticket gets rewritten before any code is touched.
-- **Refs:** [ZPT-019](#zpt-019), the README's "Frame gap" / "Frame corner
-  radius" rows, `AGENTS.md`'s compact-mode notes.
+**Keep only the page-background matching (merged into ZPT-021)**
+- **Status:** accepted · **Sev:** med · **Area:** frame.js / tint.uc.js / style.css
+- **What this was:** written as *"remove the previous repo's inset frame (gap +
+  radius + shadow)"*. The author meant something broader — **keep only the
+  page-background matching, not whatever the previous repo was doing** — which is
+  the same request as [ZPT-021](#zpt-021).
+- **Merged into:** [ZPT-021](#zpt-021). The ID stays reserved; the work is
+  tracked there.
+- **What survives from the original idea:** the inset frame (gap + radius +
+  shadow) is **presentation, not matching**, so it is not deleted by ZPT-021 by
+  default — it stays unless the author says otherwise. It matters here only
+  because it decides where [ZPT-019](#zpt-019)'s outline is drawn (inside the
+  tinted strip, or at the window edge). That is now an explicit open question
+  in both tickets.
 
 ### ZPT-021
-**Page-background becomes the ONLY behaviour (drop the `content` source)**
-- **Status:** open · **Priority:** 3 (after the outline lands) · **Sev:** med · **Area:** frame.js (bulk), tint.uc.js, preferences.json, style.css, README, AGENTS.md
-- **Goal:** one behaviour. The mod reads the page's **declared** background and
-  tints the chrome with it. The painted-pixel sampler — and everything that
-  exists only to serve it — is deleted, not deprecated.
+**Keep only the page-background matching — delete everything else the previous repo did**
+- **Status:** open · **Priority:** 2 · **Sev:** med · **Area:** frame.js (bulk), tint.uc.js, preferences.json, style.css, README, AGENTS.md
+- **Goal:** ONE behaviour. The mod reads the page's **declared** background and
+  tints the chrome with it. Everything the previous repo added **beyond** that
+  — the painted-pixel sampler, the YouTube ambient path, live-mode polling, the
+  directional gradient, the source switch — is deleted, not deprecated.
 - **Why:**
-  - The fork's thesis is "the frame continues the page's declared surface".
-    Keeping a second, competing behaviour means the user has to decide which
-    one they want (per install or per site), the README has to explain two
+  - The fork's thesis is "the frame continues the page's declared surface". A
+    second, competing behaviour means the user has to decide which one they
+    want (per install or per site), the README has to explain two
     philosophies, and every bug in the pixel path is still a bug in the mod.
   - One behaviour is also cheaper: the declared source is two computed styles
     instead of a compositor readback.
@@ -479,6 +485,12 @@ Decisions taken (do not relitigate without reason):
     source a poll is nearly free (two computed styles), so keeping a cheap
     poll may be worth more than deleting it. Decide explicitly — do not let
     the delete decide by accident.
+- **Explicitly NOT in this ticket:** the upstream **inset frame** (gap + radius
+  + shadow) is presentation, not matching — it stays unless the author says
+  otherwise. It matters here only because it decides where
+  [ZPT-019](#zpt-019)'s outline is drawn (inside the tinted strip, or at the
+  window edge). [ZPT-020](#zpt-020) was this request, mis-phrased; it is merged
+  here.
 - **Knock-on effects:**
   - Archived ZPT-004 (`drawWindow` may be removed from Gecko) becomes moot —
     the only consumer of `drawWindow` is gone. Close it.
@@ -491,8 +503,8 @@ Decisions taken (do not relitigate without reason):
     stay open and need a different answer, or an explicit "accepted".
   - The README's "Two color sources", "Directional ambient gradient" and
     "YouTube ambient mode" sections go, and the live-applies table shrinks.
-- **Refs:** ZPT-010, ZPT-011, ZPT-D004, ZPT-D005, and the archived ZPT-004 /
-  ZPT-009.
+- **Refs:** ZPT-010, ZPT-011, ZPT-D004, ZPT-D005, [ZPT-020](#zpt-020)
+  (merged in), and the archived ZPT-004 / ZPT-009.
 
 ---
 
@@ -500,8 +512,30 @@ Decisions taken (do not relitigate without reason):
 
 Fixed items, newest first. Kept for reference so the numbers aren't reused.
 
-_(nothing yet — this tracker starts at ZPT-010; earlier history is in
+_(The tracker starts at ZPT-010; earlier history is in
 [`TODO-archive.md`](TODO-archive.md))_
+
+### ZPT-D008
+**Page outline: the whole viewport, in the site's own color** — `done`
+- A squircle stroke around the **whole** page viewport — all four sides,
+  continuously — replacing the v1.1.0 hairline, which was drawn in the frame gap
+  and therefore vanished on the edge facing the sidebar.
+- `zen.page-tint.page-outline-width` (default 2px) replaces
+  `zen.page-tint.frame-separator`. `0` = off.
+- The color is the **site's** primary color, taken from its favicon by a
+  chrome-side resolver (candidates → `Image` → 32×32 canvas → pixel analysis →
+  exact shade or hue-family average → lightness clamp). Adapted from
+  [zen-tab-groups](https://github.com/oom333/zen-tab-groups) (MIT) — credited in
+  the README and the LICENSE.
+- Cached per host in `zen.page-tint.icon-colors`; the per-URL theme cache is
+  untouched. No IPC, no content-process change.
+- Fallback chain: site color → the tint's own foreground (the old hairline) →
+  no outline (an untinted page draws none).
+- The outline owns the page's shape: the content container's inner radius is
+  forced to `0` while the outline is on, so the two shapes don't compete.
+- New invariant in `AGENTS.md`: a border MAY sit on the page's outermost
+  pixels; the tint may not.
+- Version `1.1.0` → `1.2.0` in `theme.json` **and** the `// @version` header.
 
 ### ZPT-D007
 **Frame separator hairline** — `done`

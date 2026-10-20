@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Zen Tint
 // @description    Zen chrome that continues the page's background color
-// @version        1.1.0
+// @version        1.2.0
 // ==/UserScript==
 
 (() => {
@@ -112,13 +112,14 @@
   //     Non-compact only: compact mode stays flush so Zen's screen-edge hover
   //     targets remain reachable.
   //   zen.page-tint.frame-radius (int px, default 14)  → --zpt-frame-radius
-  //   zen.page-tint.frame-separator (int px, default 1) → --zpt-frame-separator-width
-  //     A hairline at the content edge, so the page reads as a bounded object
-  //     instead of dissolving into the tinted chrome — the whole point of
-  //     tinting is continuity, but continuity taken too far erases where the
-  //     page ends. The color follows the tint's own foreground (a light line on
-  //     a dark page, a dark line on a light one), so it stays legible either
-  //     way without a second knob. 0 = off.
+  //   zen.page-tint.page-outline-width (int px, default 2) → --zpt-page-outline-width
+  //     The drawn boundary. A squircle stroke around the WHOLE page viewport —
+  //     all four sides, continuously — in the site's own primary color, taken
+  //     from its favicon. It replaces the old frame-separator hairline, which
+  //     was drawn OUTSET in the frame gap: the gap only exists on three sides
+  //     (the sidebar occupies the fourth), so the line vanished on exactly the
+  //     edge it was wanted on, and a flat 1px rule cannot read as a shape.
+  //     0 = off (the page goes back to its own corners and no line is drawn).
   //   zen.page-tint.saturation   (int 0..200, default 100)
   //     Scales the sampled color's HSL saturation before it's applied. 0 =
   //     grayscale chrome, 100 = the page's own saturation, 200 = double (more
@@ -157,7 +158,7 @@
   let BRIGHTNESS = clampInt(prefInt('zen.page-tint.brightness', 100), 0, 300);
   let CONTRAST = clampInt(prefInt('zen.page-tint.contrast', 100), 0, 300);
   let AMBIENT_SPREAD = clampInt(prefInt('zen.page-tint.ambient-spread', 0), 0, 100);
-  let FRAME_SEPARATOR = clampInt(prefInt('zen.page-tint.frame-separator', 1), 0, 6);
+  let OUTLINE_WIDTH = clampInt(prefInt('zen.page-tint.page-outline-width', 2), 0, 8);
   // Ceiling on the gradient overlay's alpha. Full opacity would let an edge color
   // completely replace the base tint at the extremes, which breaks the readable-
   // foreground pick (that's computed against the base). Capping keeps the endpoints
@@ -216,6 +217,7 @@
   // Tint strength / frame gap / radius are pref-driven (Sine settings panel);
   // apply at startup.
   applyCssVarPrefs();
+  applyOutlineState();
 
   // Persistent "mod is active in this window" marker. Smoothing transitions are
   // armed against THIS attribute (not zen-page-tint) so they survive leaving a
@@ -326,9 +328,393 @@
     root.style.setProperty('--zpt-strength', `${MIX_AMOUNT}%`);
     root.style.setProperty('--zpt-frame-gap', `${Math.max(0, prefInt('zen.page-tint.frame-gap', 5))}px`);
     root.style.setProperty('--zpt-frame-radius', `${Math.max(0, prefInt('zen.page-tint.frame-radius', 14))}px`);
-    // The separator's COLOR is derived in CSS from the tint's own foreground,
-    // so only the width needs to come from here.
-    root.style.setProperty('--zpt-frame-separator-width', `${FRAME_SEPARATOR}px`);
+    // The outline's COLOR is derived in CSS (site color, else the tint's own
+    // foreground), so only the width needs to come from here.
+    root.style.setProperty('--zpt-page-outline-width', `${OUTLINE_WIDTH}px`);
+  }
+
+  // ---- The drawn boundary (page outline) ----
+  //
+  // The tint makes the chrome continuous with the page. Taken too far, that
+  // erases where the page ENDS — a sidebar and a page in the same color read as
+  // one flat field. The v1.1.0 hairline tried to fix that from the chrome
+  // side, but it was drawn OUTSET in the frame gap, and the gap only exists on
+  // three sides (the sidebar occupies the fourth): the line rendered on the
+  // top, right and bottom and vanished on exactly the edge the user asked
+  // for. A flat 1px rule cannot read as a shape either.
+  //
+  // So the boundary is DRAWN instead of implied: a squircle stroke around the
+  // whole page viewport, on all four sides, continuously, in the site's own
+  // primary color.
+  //
+  // It is a border, and a border is allowed to sit on top of the page's
+  // outermost pixels — that is what a border IS. The TINT is not allowed to
+  // (see the one-tint-layer invariant in AGENTS.md). The two jobs stay
+  // separate: the tint lives on chrome surfaces, the outline lives on the
+  // page's edge, and neither may be used to do the other's job.
+  const OUTLINE_ELEMENT_ID = 'zpt-page-outline';
+  // The corner radius of the drawn boundary is a CSS knob
+  // (--zpt-page-outline-radius), not a pref: nothing in JS needs it, because
+  // the shape is CSS's job (corner-shape: squircle).
+
+  let outlineElement = null;
+  // Bumped on every color request; a resolve that comes back stale (the user
+  // switched tabs meanwhile) must not paint the previous site's color.
+  let outlineColorToken = 0;
+
+  function applyOutlineState() {
+    // The outline's on/off state also decides the page's own corner shape, so
+    // it needs an attribute and not just a variable.
+    if (OUTLINE_WIDTH > 0) root.setAttribute('zen-page-tint-outline', 'on');
+    else root.removeAttribute('zen-page-tint-outline');
+  }
+
+  // The outline is a plain element in the chrome document that we position
+  // over the page viewport. It lives in the document body (NOT inside the
+  // browser's container) so nothing clips it to the page's own rounded shape,
+  // and it is position:fixed with viewport coordinates, which is exactly what
+  // getBoundingClientRect() reports.
+  function ensureOutlineElement() {
+    if (outlineElement?.isConnected) return outlineElement;
+    const host = document.body || document.documentElement;
+    if (!host) return null;
+    const el = document.createElement('div');
+    el.id = OUTLINE_ELEMENT_ID;
+    el.setAttribute('aria-hidden', 'true');
+    // left/top are set explicitly (rather than left to the static position)
+    // so the first measurement can tell where the containing block starts.
+    el.style.left = '0px';
+    el.style.top = '0px';
+    host.appendChild(el);
+    outlineElement = el;
+    return el;
+  }
+
+  // The origin of the outline's containing block, in viewport coordinates. For
+  // a fixed-position element that is the viewport itself — unless an ancestor
+  // has a transform or a filter, which would make THAT ancestor the containing
+  // block. It is measured rather than assumed: the element's own rect says
+  // where it actually landed, so the difference is a constant offset to
+  // subtract. The measurement reuses the layout flush the browser's rect read
+  // already did, so it costs no extra reflow.
+  let outlineOrigin = { x: 0, y: 0 };
+
+  // Move the outline onto the browser's rect. The stroke is centered on the
+  // box edge, so the box is inset by half of it: the whole line lands on the
+  // page's own pixels instead of half of it hanging over the chrome.
+  function updateOutlineGeometry(browser) {
+    const el = ensureOutlineElement();
+    if (!el || !browser) return;
+    let rect;
+    try { rect = browser.getBoundingClientRect(); } catch { return; }
+    if (!rect || rect.width < 16 || rect.height < 16) return;
+
+    // Where did the element actually land? The layout is clean here (the read
+    // above flushed it), so this costs no extra reflow. A hidden element
+    // reports a zero rect, which would be a lie — keep the last known origin.
+    const cur = el.getBoundingClientRect();
+    if (cur.width > 0 || cur.height > 0) {
+      outlineOrigin.x = cur.left - (parseFloat(el.style.left) || 0);
+      outlineOrigin.y = cur.top - (parseFloat(el.style.top) || 0);
+    }
+
+    const inset = OUTLINE_WIDTH / 2;
+    el.style.left = `${rect.left + inset - outlineOrigin.x}px`;
+    el.style.top = `${rect.top + inset - outlineOrigin.y}px`;
+    el.style.width = `${Math.max(0, rect.width - OUTLINE_WIDTH)}px`;
+    el.style.height = `${Math.max(0, rect.height - OUTLINE_WIDTH)}px`;
+  }
+
+  // ---- The site's primary color, from its favicon ----
+  //
+  // The outline's color is the SITE's color — the brand mark, not the page's
+  // idea of a background color. A page's <meta name="theme-color"> is usually
+  // its background (GitHub's is rgb(30,35,39)), and scanning CSS custom
+  // properties means guessing at property names across every framework. The
+  // favicon IS the brand mark, it is per-SITE (so it can be cached once per
+  // host and reused by every tab on that host), and reading it needs no content
+  // process at all: the chrome already has the tab, its icon and the host.
+  //
+  // The algorithm is borrowed from zen-tab-groups (MIT, (c) 2026 oom333), which
+  // colors its section headers from the site icon — see LICENSE.
+  const ICON_COLORS_PREF = 'zen.page-tint.icon-colors';
+  const ICON_COLORS_MAX = 500;
+  const ICON_LOAD_TIMEOUT_MS = 5000;
+  // A site whose icon yields no color is retried after this long: the icon may
+  // simply not have arrived yet (the browser shows a grey placeholder until it
+  // does).
+  const ICON_MISS_RETRY_MS = 30 * 60 * 1000;
+
+  // host -> "#rrggbb", or "" for a sure answer of "this icon has no usable
+  // color" (a monochrome logo). Both are cached, so the icon is fetched once
+  // per site and not on every navigation.
+  const iconColors = loadIconColors();
+  // "We have no idea yet" — kept in memory only, so a restart is a good moment
+  // to try again, and so a site without a color is not re-fetched on every
+  // navigation.
+  const iconColorMisses = new Map();
+  // In-flight lookups, so two tabs on the same host don't fetch the icon twice.
+  const iconColorJobs = new Map();
+
+  function loadIconColors() {
+    const map = new Map();
+    const raw = prefStr(ICON_COLORS_PREF, '');
+    if (!raw) return map;
+    try {
+      const obj = JSON.parse(raw);
+      for (const [host, value] of Object.entries(obj)) {
+        if (typeof value !== 'string') continue;
+        if (/^#[0-9a-f]{6}$/i.test(value)) map.set(host, value.toLowerCase());
+        else if (value === '') map.set(host, '');
+      }
+    } catch (e) { log('icon color cache parse failed', e); }
+    return map;
+  }
+
+  function saveIconColors() {
+    try {
+      // Keep the pref bounded: it is a single JSON blob and a long-lived
+      // session can visit hundreds of hosts.
+      while (iconColors.size > ICON_COLORS_MAX) {
+        iconColors.delete(iconColors.keys().next().value);
+      }
+      Services.prefs.setStringPref(ICON_COLORS_PREF, JSON.stringify(Object.fromEntries(iconColors)));
+    } catch (e) { log('icon color cache save failed', e); }
+  }
+
+  // The cache key is the site, not the page: a color belongs to the brand, and
+  // every tab on the same host should get the same outline.
+  function siteKey(host) {
+    return host.replace(/^www\./, '');
+  }
+
+  // The tab's own icon is the real favicon of THIS page, so it is the best
+  // candidate — but on navigation it still holds the PREVIOUS page's icon
+  // until the new favicon loads, which would cache one site's brand color
+  // under another site's host. So it is only trusted when its URL points at
+  // the same site.
+  function tabIconFor(browser, site) {
+    try {
+      const tab = gBrowser.getTabForBrowser(browser);
+      const src = tab?.getAttribute('image');
+      if (!src) return null;
+      if (src.startsWith('data:')) return null;   // no host to check against
+      const host = new URL(src).hostname.toLowerCase();
+      if (!host) return null;
+      if (host !== site && !host.endsWith(`.${site}`)) return null;
+      return src;
+    } catch { return null; }
+  }
+
+  // Icon candidates for a site, most specific first:
+  //   1. the open tab's own icon — the real favicon of THIS page
+  //   2. page-icon: for the www host and for the bare host (the favicon
+  //      service is keyed by URL, so one of the two usually has it)
+  //   3. the site's own /favicon.ico
+  function iconCandidates(browser, site) {
+    const list = [];
+    const tabIcon = tabIconFor(browser, site);
+    if (tabIcon) list.push(tabIcon);
+    list.push(`page-icon:https://www.${site}/`, `page-icon:https://${site}/`, `https://${site}/favicon.ico`);
+    return list;
+  }
+
+  // The site's primary color, from its icon. Adapted from zen-tab-groups
+  // (MIT, (c) 2026 oom333).
+  //   - white, grey and near-black pixels never count, so a half white, half
+  //     green logo is green
+  //   - a mostly dark logo, or one with almost no color, gets no color at all
+  //   - the most common exact shade wins when it clearly leads (a logo is
+  //     usually flat color); otherwise the biggest hue family is averaged, so
+  //     a gradient that crosses a family border isn't split in two
+  function dominantColor(img) {
+    const size = 32;
+    const canvas = document.createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    // No smoothing: blending pixels while scaling invents in-between shades.
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, size, size);
+    let data;
+    try {
+      data = ctx.getImageData(0, 0, size, size).data;
+    } catch (e) {
+      // A cross-origin icon taints the canvas and the read throws. The
+      // page-icon: protocol is privileged and does not taint; a plain
+      // https:// favicon usually does.
+      return null;
+    }
+
+    // Count every exact colorful shade (logos use flat colors; gradients
+    // spread over many slightly different ones), and its hue family
+    // (12 families of 30°, shifted so pure red sits in the middle of one).
+    const shades = new Map();
+    const families = Array.from({ length: 12 }, () => ({ n: 0, r: 0, g: 0, b: 0 }));
+    const add = (into, r, g, b) => { into.n++; into.r += r; into.g += g; into.b += b; };
+    let opaque = 0;
+    let dark = 0;
+    let colorful = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+      if (a < 128) continue;
+      opaque++;
+      const hsl = rgbToHsl(r, g, b);
+      if (hsl.l < 0.2) { dark++; continue; }
+      if (hsl.l > 0.85 || hsl.s < 0.25) continue;   // white / grey
+      colorful++;
+      const key = (r << 16) | (g << 8) | b;
+      if (!shades.has(key)) shades.set(key, { n: 0, r: 0, g: 0, b: 0 });
+      add(shades.get(key), r, g, b);
+      add(families[Math.floor(((hsl.h * 360 + 15) % 360) / 30)], r, g, b);
+    }
+    if (!opaque || dark / opaque >= 0.75 || colorful / opaque < 0.08) return null;
+
+    const sorted = [...shades.values()].sort((a, b) => b.n - a.n);
+    const top = sorted[0];
+    const second = sorted[1];
+    let pick = top;
+    if (second && top.n < second.n * 1.5 && top.n < colorful * 0.25) {
+      const score = (i) => families[i].n + 0.5 * (families[(i + 11) % 12].n + families[(i + 1) % 12].n);
+      let best = 0;
+      for (let i = 1; i < 12; i++) if (score(i) > score(best)) best = i;
+      pick = families[best];
+    }
+    const hsl = rgbToHsl(pick.r / pick.n, pick.g / pick.n, pick.b / pick.n);
+    // Clamp for visibility: a brand color that is nearly black or nearly white
+    // disappears against the page.
+    const l = Math.min(Math.max(hsl.l, 0.45), 0.72);
+    const s = Math.max(hsl.s, 0.45);
+    const rgb = hslToRgb(hsl.h, s, l);
+    return `#${[rgb.r, rgb.g, rgb.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  function loadIconImage(src) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (img) => { if (done) return; done = true; resolve(img); };
+      const timer = setTimeout(() => finish(null), ICON_LOAD_TIMEOUT_MS);
+      let img;
+      try { img = new window.Image(); } catch { clearTimeout(timer); finish(null); return; }
+      img.onload = () => { clearTimeout(timer); finish(img.naturalWidth ? img : null); };
+      img.onerror = () => { clearTimeout(timer); finish(null); };
+      try { img.src = src; } catch { clearTimeout(timer); finish(null); }
+    });
+  }
+
+  async function resolveSiteColor(browser, site) {
+    const cached = iconColors.get(site);
+    if (cached !== undefined) return cached || null;
+    const miss = iconColorMisses.get(site);
+    if (miss !== undefined && Date.now() - miss < ICON_MISS_RETRY_MS) return null;
+    if (iconColorJobs.has(site)) return iconColorJobs.get(site);
+    const job = (async () => {
+      let color = null;
+      let sure = false;   // only a real icon's answer is worth caching
+      for (const src of iconCandidates(browser, site)) {
+        const img = await loadIconImage(src);
+        if (!img) continue;
+        try { color = dominantColor(img); } catch (e) { color = null; }
+        // A page-icon: with no color may just be the browser's grey placeholder
+        // (a site this profile has not visited yet), so try the next candidate.
+        if (color || !src.startsWith('page-icon:')) { sure = true; break; }
+      }
+      iconColorJobs.delete(site);
+      if (sure) {
+        iconColors.set(site, color || '');
+        saveIconColors();
+      } else {
+        iconColorMisses.set(site, Date.now());
+      }
+      log('site color', site, '->', color || '(none)');
+      return color;
+    })();
+    iconColorJobs.set(site, job);
+    return job;
+  }
+
+  // Ask for the site's color and paint it when it arrives. The color is
+  // written as a variable and CSS picks the fallback chain:
+  //   site color -> the tint's own foreground (the old hairline) -> nothing.
+  let lastSiteColor = null;
+  function setSiteColor(color) {
+    // Deduped: the same site comes back on every tab switch, and rewriting an
+    // unchanged custom property still invalidates style for every var()
+    // consumer in the chrome.
+    if (color === lastSiteColor) return;
+    lastSiteColor = color || null;
+    if (color) root.style.setProperty('--zpt-page-site-color', color);
+    else root.style.removeProperty('--zpt-page-site-color');
+  }
+
+  // Drop the site's color and discard any lookup still in flight for the page
+  // we just left — it would paint the previous site's color over the new one.
+  function clearOutlineColor() {
+    outlineColorToken++;
+    setSiteColor(null);
+  }
+
+  function requestOutlineColor(browser) {
+    const url = browser?.currentURI?.spec || '';
+    let host = null;
+    try { host = new URL(url).hostname.toLowerCase(); } catch {}
+    if (!host || isInternalUrl(url)) {
+      clearOutlineColor();
+      return;
+    }
+    const token = ++outlineColorToken;
+    resolveSiteColor(browser, siteKey(host)).then((color) => {
+      if (token !== outlineColorToken) return;   // a newer tab took over
+      setSiteColor(color);
+    }).catch(() => {});
+  }
+
+  // Keep the outline on the browser's rect as the layout moves (sidebar
+  // expand/collapse, window resize, Zen's compact mode). The observer fires on
+  // the browser element's SIZE change, which covers every one of those; the
+  // window resize listener is the belt-and-suspenders for the cases where the
+  // element is re-laid-out without a size change.
+  let observedBrowser = null;
+  const outlineResizeObserver = new ResizeObserver(() => {
+    const browser = gBrowser.selectedBrowser;
+    if (browser) updateOutlineGeometry(browser);
+  });
+  function observeOutlineBrowser(browser) {
+    if (observedBrowser === browser) return;
+    try { if (observedBrowser) outlineResizeObserver.unobserve(observedBrowser); } catch {}
+    observedBrowser = browser;
+    if (browser) { try { outlineResizeObserver.observe(browser); } catch {} }
+  }
+
+  // The outline follows the TINTED page: it is part of the same behaviour, so
+  // an untinted page (about:, a disabled host, a page with no declared
+  // background) gets no outline either. The attribute gate is in CSS; this
+  // only moves and colors it.
+  function updateOutlineFor(browser) {
+    if (!browser) return;
+    showOutline(true);
+    updateOutlineGeometry(browser);
+    observeOutlineBrowser(browser);
+    requestOutlineColor(browser);
+  }
+
+  // The Glance overlay dims the parent page and covers the content area, so
+  // the parent's outline would be drawn over the dim. Hide it until the Glance
+  // is expanded into a normal tab.
+  function showOutline(visible) {
+    if (!outlineElement) return;
+    outlineElement.style.display = visible ? '' : 'none';
+  }
+
+  function removeOutlineElement() {
+    try { outlineResizeObserver.disconnect(); } catch {}
+    try { if (observedBrowser) outlineResizeObserver.unobserve(observedBrowser); } catch {}
+    observedBrowser = null;
+    try { outlineElement?.remove(); } catch {}
+    outlineElement = null;
+    lastSiteColor = null;
+    root.style.removeProperty('--zpt-page-site-color');
   }
 
   // Write the tint variables for a raw sampled color (null, or strength 0, clears
@@ -465,6 +851,11 @@
         cacheSet(key, { bg: theme.bg, edges: theme.edges || null });
         if (canApply) {
           applyTheme({ bg: theme.bg, edges: theme.edges || null });
+          // The outline is updated OUTSIDE applyTheme: applyTheme dedupes
+          // same-colored pages (most pages are white or one of a few greys),
+          // but the outline's color belongs to the SITE, so two white pages on
+          // different hosts still need different outlines.
+          updateOutlineFor(browser);
           log('applied', { bg: theme.bg, edges: !!theme.edges });
         }
       } else if (canApply) {
@@ -475,6 +866,7 @@
         // entry a foreground tab on the same URL is relying on.
         themeCache.delete(key);
         applyTheme(null);
+        updateOutlineFor(browser);
       }
     };
   }
@@ -579,12 +971,19 @@
     if (!browser) return;
     if (isTransientGlance(browser)) {
       log('transient Glance selected; preserving parent tint');
+      showOutline(false);
       return;
     }
     const url = browser.currentURI?.spec || '';
 
     // Internal pages and per-site-disabled hosts keep Zen's own chrome (no tint).
-    if (isInternalUrl(url) || hostMatches(url, DISABLE_HOSTS)) { applyTheme(null); return; }
+    if (isInternalUrl(url) || hostMatches(url, DISABLE_HOSTS)) {
+      applyTheme(null);
+      // No outline either: the boundary belongs to the same behaviour as the
+      // tint it belongs to.
+      clearOutlineColor();
+      return;
+    }
 
     const key = cacheKey(url);
 
@@ -599,6 +998,7 @@
     const hit = cacheGet(key);
     if (hit !== undefined) {
       applyTheme(hit);
+      updateOutlineFor(browser);
       // The cache is keyed by URL, not browser, so a hit can land on a tab whose
       // content process never loaded frame.js (a duplicate-URL tab, or one whose
       // mm was recreated). Ensure the listener is live, and load the frame script
@@ -690,6 +1090,16 @@
     colorSchemeQuery.addEventListener('change', onColorSchemeChange);
   } catch {}
 
+  // The outline is positioned over the page viewport, so it has to follow the
+  // layout: a window resize moves the browser's rect. (The ResizeObserver on
+  // the browser element covers the rest — sidebar expand/collapse, Zen's
+  // compact mode, the toolbar collapsing.)
+  const onWindowResize = () => {
+    const browser = gBrowser.selectedBrowser;
+    if (browser) updateOutlineGeometry(browser);
+  };
+  window.addEventListener('resize', onWindowResize);
+
   // Live-apply the appearance prefs (mix / saturation / lightness / gap / radius /
   // disable-hosts) when they're changed from the Sine settings panel, so the
   // effect is visible without a restart. (The live-mode prefs are read once at
@@ -753,9 +1163,14 @@
         case 'zen.page-tint.frame-radius':
           applyCssVarPrefs();
           break;
-        case 'zen.page-tint.frame-separator':
-          FRAME_SEPARATOR = clampInt(prefInt('zen.page-tint.frame-separator', 1), 0, 6);
+        case 'zen.page-tint.page-outline-width':
+          OUTLINE_WIDTH = clampInt(prefInt('zen.page-tint.page-outline-width', 2), 0, 8);
           applyCssVarPrefs();
+          applyOutlineState();
+          // The stroke width is half of the box inset, so the outline's box
+          // has to be recomputed — and the page's own corner shape flips with
+          // the attribute.
+          updateOutlineGeometry(gBrowser.selectedBrowser);
           break;
         // Color-source changes invalidate every cached sample, since the cache
         // stores the resulting color rather than the pixels it came from. Clear
@@ -787,6 +1202,7 @@
     try {
       if (colorSchemeQuery && onColorSchemeChange) colorSchemeQuery.removeEventListener('change', onColorSchemeChange);
     } catch {}
+    try { window.removeEventListener('resize', onWindowResize); } catch {}
     try { Services.prefs.removeObserver('zen.page-tint.', prefObserver); } catch {}
     try { if (scheduleRafId) cancelAnimationFrame(scheduleRafId); } catch {}
     try { if (scheduleTimerId) clearTimeout(scheduleTimerId); } catch {}
@@ -812,8 +1228,10 @@
       }
     } catch {}
     applyTheme(null);
+    removeOutlineElement();
     root.removeAttribute('zen-page-tint-active');
     root.removeAttribute('zen-page-tint-live');
+    root.removeAttribute('zen-page-tint-outline');
   };
   if (typeof addUnloadListener === 'function') addUnloadListener(cleanup);
   else window.addEventListener('unload', cleanup, { once: true });
